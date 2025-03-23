@@ -1,5 +1,5 @@
 {
-    "name": "editor-de-texto-rich",
+    "name": "ww-input-rich-text-juris-app",
     "version": "3.0.1",
     "scripts": {
         "build": "weweb build",
