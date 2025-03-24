@@ -421,8 +421,15 @@ export default {
 
             if (this.isReadonly) this.handleOnUpdate();
         },
-        isEditable(value) {
-            this.richEditor.setEditable(value);
+        'content.editable': function(value) {
+            if (this.richEditor) {
+                this.richEditor.setEditable(value !== false);
+            }
+        },
+        'wwElementState.props.editable': function(value) {
+            if (this.richEditor) {
+                this.richEditor.setEditable(value !== false);
+            }
         },
         variableValue(value) {
             if (value !== this.getContent()) this.richEditor.commands.setContent(value);
@@ -631,7 +638,7 @@ export default {
                 : this.wwElementState.props.readonly;
         },
         isEditable() {
-            return !this.isReadonly && this.content.editable;
+            return true; // Forçando o editor a sempre ser editável
         },
         hideMenu() {
             return this.content.hideMenu || this.isReadonly;
@@ -1016,21 +1023,8 @@ export default {
 
             this.richEditor = new Editor({
                 content: String(this.content.initialValue || ''),
-                editable: this.isEditable || this.wwEditorState?.isEditing,
-                autofocus: this.content.autofocus || false,
-                editorProps: {
-                    attributes: {
-                        placeholder: wwLib.wwLang.getText(this.content.placeholder || '')
-                    },
-                    handleClickOn: (view, pos, node) => {
-                        if (node.type.name === 'mention') {
-                            this.$emit('trigger-event', {
-                                name: 'mention:click',
-                                event: { mention: { id: node.attrs.id, label: node.attrs.label } },
-                            });
-                        }
-                    },
-                },
+                editable: true,
+                autofocus: true, // Forçando autofocus para garantir que o editor receba foco
                 extensions: [
                     StarterKit.configure({
                         history: true,
@@ -1073,7 +1067,12 @@ export default {
                     this.setValue(this.getContent());
                     this.setMentions(this.richEditor.getJSON().content.reduce(extractMentions, []));
                 },
-                onUpdate: this.handleOnUpdate,
+                onUpdate: () => {
+                    this.handleOnUpdate();
+                    
+                    // Verifica variáveis a cada atualização do conteúdo
+                    this.verificarVariaveisNoConteudo();
+                },
                 onSelectionUpdate: ({ editor }) => {
                     this.currentSelectionEmpty = editor.state.selection.empty;
                     
@@ -1098,6 +1097,14 @@ export default {
                 parseOptions: {
                     preserveWhitespace: false,
                 },
+                onPaste: () => {
+                    // Agendar a normalização de variáveis após a colagem
+                    setTimeout(() => {
+                        this.normalizarVariaveis();
+                    }, 100);
+                    // Continuar com o comportamento padrão
+                    return false;
+                },
             });
             
             this.loading = false;
@@ -1112,296 +1119,24 @@ export default {
                     event.preventDefault();
                     event.stopPropagation();
                     
-                    try {
-                        // Obter o HTML da área de transferência
-                        const html = event.clipboardData.getData('text/html');
-                        const textoPlano = event.clipboardData.getData('text/plain');
-                        
-                        if (html) {
-                            // Criar elemento temporário para processar o HTML
-                            const div = document.createElement('div');
-                            div.innerHTML = html;
-                            
-                            // Verificar e corrigir todas as tags <var> sem {{}}
-                            const varTags = div.querySelectorAll('var');
-                            varTags.forEach(varTag => {
-                                const conteudo = varTag.textContent;
-                                // Se o conteúdo não estiver entre {{}}
-                                if (!(conteudo.startsWith('{{') && conteudo.endsWith('}}'))) {
-                                    // Limpa o texto e adiciona as chaves
-                                    const textoLimpo = conteudo
-                                        .replace(/[^\w\s]/g, '')
-                                        .replace(/[\s_]+/g, '-');
-                                    
-                                    // Substituir o conteúdo da tag <var>
-                                    varTag.textContent = `{{${textoLimpo}}}`;
-                                } else {
-                                    // Se já está entre chaves, só garantir que underscores são substituídos
-                                    const textoSemChaves = conteudo.substring(2, conteudo.length - 2);
-                                    const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
-                                    varTag.textContent = `{{${textoLimpo}}}`;
-                                }
-                            });
-                            
-                            // Função para remover atributos e estilos relacionados a fontes
-                            const removerFormatacaoFonte = (elemento) => {
-                                if (!elemento) return;
-                                
-                                // Remover atributos de estilo de fonte completamente
-                                if (elemento.style) {
-                                    elemento.style.fontFamily = '';
-                                    elemento.style.fontSize = '';
-                                    elemento.style.font = '';
-                                    elemento.style.color = '';
-                                    elemento.style.backgroundColor = '';
-                                    elemento.style.lineHeight = '';
-                                    elemento.style.letterSpacing = '';
-                                    elemento.style.wordSpacing = '';
-                                    elemento.style.textIndent = '';
-                                }
-                                
-                                // Remover vários atributos relacionados a formatação
-                                const atributosParaRemover = [
-                                    'face', 'size', 'color', 'bgcolor', 'style',
-                                    'class', 'align', 'valign', 'data-mce-style',
-                                    'data-font', 'data-size', 'data-color'
-                                ];
-                                
-                                atributosParaRemover.forEach(attr => {
-                                    elemento.removeAttribute(attr);
-                                });
-                                
-                                // Processar filhos recursivamente
-                                Array.from(elemento.children || []).forEach(removerFormatacaoFonte);
-                            };
-                            
-                            // Processar todos os elementos
-                            removerFormatacaoFonte(div);
-                            
-                            // Converter tags específicas em elementos neutros
-                            const seletoresTagsParaConverter = 'font, span[style], b[style], i[style], u[style], s[style], strong[style], em[style]';
-                            const tagsParaConverter = div.querySelectorAll(seletoresTagsParaConverter);
-                            
-                            tagsParaConverter.forEach(tag => {
-                                // Se a tag não tem conteúdo de texto, mais eficiente apenas removê-la
-                                if (!tag.textContent.trim()) {
-                                    if (tag.parentNode) {
-                                        tag.parentNode.removeChild(tag);
-                                    }
-                                    return;
-                                }
-                                
-                                // Para tags com conteúdo, substituir por span limpo
-                                const span = document.createElement('span');
-                                span.innerHTML = tag.innerHTML;
-                                
-                                if (tag.parentNode) {
-                                    tag.parentNode.replaceChild(span, tag);
-                                }
-                            });
-                            
-                            // Simplificar elementos aninhados desnecessariamente
-                            const simplificarElementos = (elemento) => {
-                                if (!elemento || !elemento.children || elemento.children.length === 0) return;
-                                
-                                Array.from(elemento.children).forEach(filho => {
-                                    // Primeiro simplifica recursivamente os filhos
-                                    simplificarElementos(filho);
-                                    
-                                    // Se o filho é um span sem atributos e seu pai também é um elemento de formatação
-                                    if (filho.tagName.toLowerCase() === 'span' && 
-                                        !filho.attributes.length && 
-                                        ['span', 'p', 'div'].includes(elemento.tagName.toLowerCase())) {
-                                        // Mover o conteúdo do filho para o pai
-                                        while (filho.firstChild) {
-                                            elemento.insertBefore(filho.firstChild, filho);
-                                        }
-                                        // Remover o filho vazio
-                                        elemento.removeChild(filho);
-                                    }
-                                });
-                            };
-                            
-                            // Simplificar a estrutura do HTML
-                            simplificarElementos(div);
-                            
-                            // Obter o HTML limpo
-                            const htmlLimpo = div.innerHTML;
-                            console.log('Colando HTML com todas as formatações removidas');
-                            
-                            // Inserir o HTML limpo no editor
-                            this.richEditor.commands.insertContent(htmlLimpo);
-                        } 
-                        // Se não tiver HTML, colar como texto plano
-                        else if (textoPlano) {
-                            console.log('Colando como texto plano');
-                            this.richEditor.commands.insertContent(textoPlano);
-                        }
-                    } catch (error) {
-                        console.error('Erro ao processar colagem:', error);
-                        
-                        // Fallback: inserir como texto plano em caso de erro
-                        try {
-                            const textoPlano = event.clipboardData.getData('text/plain');
-                            if (textoPlano && this.richEditor) {
-                                this.richEditor.commands.insertContent(textoPlano);
-                            }
-                        } catch (e) {
-                            console.error('Erro no fallback de colagem:', e);
-                        }
-                    }
-                });
-            }
-            
-            // Adicionar manipulador global de colagem apenas para texto plano
-            if (this.$el && this.$el.querySelector('.ProseMirror')) {
-                const editor = this.$el.querySelector('.ProseMirror');
-                
-                // Adicionar evento de colagem diretamente ao elemento do editor
-                editor.addEventListener('paste', (event) => {
-                    // Prevenir comportamento padrão
-                    event.preventDefault();
-                    event.stopPropagation();
+                    // Obter apenas texto plano
+                    const textoPlano = event.clipboardData.getData('text/plain');
                     
-                    try {
-                        // Obter o HTML da área de transferência
-                        const html = event.clipboardData.getData('text/html');
-                        const textoPlano = event.clipboardData.getData('text/plain');
-                        
-                        if (html) {
-                            // Criar elemento temporário para processar o HTML
-                            const div = document.createElement('div');
-                            div.innerHTML = html;
-                            
-                            // Verificar e corrigir todas as tags <var> sem {{}}
-                            const varTags = div.querySelectorAll('var');
-                            varTags.forEach(varTag => {
-                                const conteudo = varTag.textContent;
-                                // Se o conteúdo não estiver entre {{}}
-                                if (!(conteudo.startsWith('{{') && conteudo.endsWith('}}'))) {
-                                    // Limpa o texto e adiciona as chaves
-                                    const textoLimpo = conteudo
-                                        .replace(/[^\w\s]/g, '')
-                                        .replace(/[\s_]+/g, '-');
-                                    
-                                    // Substituir o conteúdo da tag <var>
-                                    varTag.textContent = `{{${textoLimpo}}}`;
-                                } else {
-                                    // Se já está entre chaves, só garantir que underscores são substituídos
-                                    const textoSemChaves = conteudo.substring(2, conteudo.length - 2);
-                                    const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
-                                    varTag.textContent = `{{${textoLimpo}}}`;
-                                }
-                            });
-                            
-                            // Função para remover atributos e estilos relacionados a fontes
-                            const removerFormatacaoFonte = (elemento) => {
-                                if (!elemento) return;
-                                
-                                // Remover atributos de estilo de fonte completamente
-                                if (elemento.style) {
-                                    elemento.style.fontFamily = '';
-                                    elemento.style.fontSize = '';
-                                    elemento.style.font = '';
-                                    elemento.style.color = '';
-                                    elemento.style.backgroundColor = '';
-                                    elemento.style.lineHeight = '';
-                                    elemento.style.letterSpacing = '';
-                                    elemento.style.wordSpacing = '';
-                                    elemento.style.textIndent = '';
-                                }
-                                
-                                // Remover vários atributos relacionados a formatação
-                                const atributosParaRemover = [
-                                    'face', 'size', 'color', 'bgcolor', 'style',
-                                    'class', 'align', 'valign', 'data-mce-style',
-                                    'data-font', 'data-size', 'data-color'
-                                ];
-                                
-                                atributosParaRemover.forEach(attr => {
-                                    elemento.removeAttribute(attr);
-                                });
-                                
-                                // Processar filhos recursivamente
-                                Array.from(elemento.children || []).forEach(removerFormatacaoFonte);
-                            };
-                            
-                            // Processar todos os elementos
-                            removerFormatacaoFonte(div);
-                            
-                            // Converter tags específicas em elementos neutros
-                            const seletoresTagsParaConverter = 'font, span[style], b[style], i[style], u[style], s[style], strong[style], em[style]';
-                            const tagsParaConverter = div.querySelectorAll(seletoresTagsParaConverter);
-                            
-                            tagsParaConverter.forEach(tag => {
-                                // Se a tag não tem conteúdo de texto, mais eficiente apenas removê-la
-                                if (!tag.textContent.trim()) {
-                                    if (tag.parentNode) {
-                                        tag.parentNode.removeChild(tag);
-                                    }
-                                    return;
-                                }
-                                
-                                // Para tags com conteúdo, substituir por span limpo
-                                const span = document.createElement('span');
-                                span.innerHTML = tag.innerHTML;
-                                
-                                if (tag.parentNode) {
-                                    tag.parentNode.replaceChild(span, tag);
-                                }
-                            });
-                            
-                            // Simplificar elementos aninhados desnecessariamente
-                            const simplificarElementos = (elemento) => {
-                                if (!elemento || !elemento.children || elemento.children.length === 0) return;
-                                
-                                Array.from(elemento.children).forEach(filho => {
-                                    // Primeiro simplifica recursivamente os filhos
-                                    simplificarElementos(filho);
-                                    
-                                    // Se o filho é um span sem atributos e seu pai também é um elemento de formatação
-                                    if (filho.tagName.toLowerCase() === 'span' && 
-                                        !filho.attributes.length && 
-                                        ['span', 'p', 'div'].includes(elemento.tagName.toLowerCase())) {
-                                        // Mover o conteúdo do filho para o pai
-                                        while (filho.firstChild) {
-                                            elemento.insertBefore(filho.firstChild, filho);
-                                        }
-                                        // Remover o filho vazio
-                                        elemento.removeChild(filho);
-                                    }
-                                });
-                            };
-                            
-                            // Simplificar a estrutura do HTML
-                            simplificarElementos(div);
-                            
-                            // Obter o HTML limpo
-                            const htmlLimpo = div.innerHTML;
-                            console.log('Colando HTML com todas as formatações removidas');
-                            
-                            // Inserir o HTML limpo no editor
-                            this.richEditor.commands.insertContent(htmlLimpo);
+                    if (textoPlano) {
+                        // Método 1: usar document.execCommand (compatível com mais navegadores)
+                        if (document.queryCommandSupported('insertText')) {
+                            document.execCommand('insertText', false, textoPlano);
                         } 
-                        // Se não tiver HTML, colar como texto plano
-                        else if (textoPlano) {
-                            console.log('Colando como texto plano');
-                            this.richEditor.commands.insertContent(textoPlano);
-                        }
-                    } catch (error) {
-                        console.error('Erro ao processar colagem:', error);
-                        
-                        // Fallback: inserir como texto plano em caso de erro
-                        try {
-                            const textoPlano = event.clipboardData.getData('text/plain');
-                            if (textoPlano && this.richEditor) {
-                                this.richEditor.commands.insertContent(textoPlano);
-                            }
-                        } catch (e) {
-                            console.error('Erro no fallback de colagem:', e);
+                        // Método 2: fallback para TipTap API
+                        else if (this.richEditor) {
+                            this.richEditor.commands.insertContent(textoPlano, {
+                                parseOptions: { preserveWhitespace: true }
+                            });
                         }
                     }
-                });
+                    
+                    return false;
+                }, true);
             }
             
             // Força o foco no editor após carregar
@@ -1409,61 +1144,39 @@ export default {
                 this.richEditor.commands.focus();
             }, 100);
         },
-        handleOnUpdate({ editor }) {
-            const htmlValue = this.getContent();
+        handleOnUpdate() {
+            const htmlValue = this.richEditor.getHTML();
+            if (!htmlValue) return;
             
-            if (this.variableValue === htmlValue) return;
-            
-            // Salvar a posição atual do cursor antes de qualquer modificação
-            const { state } = editor;
-            const posicaoAtual = state.selection.anchor;
-            
-            this.setValue(htmlValue);
-            
-            // Flag para verificar se alguma alteração foi feita
-            let alteracaoRealizada = false;
+            const currentDoc = this.richEditor.view.state.doc;
             
             // Verificar todos os nós que contêm a tag <var>
-            editor.view.state.doc.descendants((node, pos) => {
+            this.richEditor.view.state.doc.descendants((node, pos) => {
                 if (node.type.name === 'var') {
                     // Obter o texto dentro da tag <var>
-                    const varContent = editor.view.state.doc.textBetween(pos, pos + node.nodeSize, '');
+                    const varContent = currentDoc.textBetween(pos, pos + node.nodeSize, '');
                     
                     // Verificar se o texto está no formato {{texto}}
                     if (!(varContent.startsWith('{{') && varContent.endsWith('}}'))) {
                         // Se não estiver no formato correto, remover a tag <var>
-                        editor.chain()
+                        this.richEditor.chain()
                             .setTextSelection({ from: pos, to: pos + node.nodeSize })
                             .unsetVar()
                             .run();
-                        alteracaoRealizada = true;
                     } else {
-                        // Verificar se tem underscores e substituí-los por hífens
+                        // Se estiver no formato correto, verificar se tem underscores
+                        // e substitui-los por hífens
                         if (varContent.includes('_')) {
                             const textoSemChaves = varContent.substring(2, varContent.length - 2);
                             const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
                             
                             if (textoSemChaves !== textoLimpo) {
-                                // Substituir o conteúdo com underscores por hífens
-                                const posAntesEdicao = editor.state.selection.anchor;
-                                
-                                editor.chain()
+                                // Substitui o conteúdo com underscores por hífens
+                                this.richEditor.chain()
                                     .setTextSelection({ from: pos, to: pos + node.nodeSize })
                                     .deleteSelection()
                                     .insertContent(`<var>{{${textoLimpo}}}</var>`)
                                     .run();
-                                    
-                                alteracaoRealizada = true;
-                                
-                                // Calcular ajuste da posição do cursor após edição
-                                if (pos < posAntesEdicao) {
-                                    // Se a edição foi antes do cursor, ajustar a diferença
-                                    const diff = textoLimpo.length - textoSemChaves.length;
-                                    // Restaurar cursor com ajuste se necessário
-                                    setTimeout(() => {
-                                        editor.commands.setTextSelection(posAntesEdicao + diff);
-                                    }, 0);
-                                }
                             }
                         }
                     }
@@ -1475,75 +1188,338 @@ export default {
             const htmlString = htmlValue.toString();
             const varPattern = /\{\{([^{}]+)\}\}/g;
             let match;
-            let alterado = false;
-            
-            // Criar uma cópia do conteúdo original para manipulação
-            let novoConteudo = htmlString;
             
             while ((match = varPattern.exec(htmlString)) !== null) {
-                const textoCompleto = match[0]; // {{texto}}
-                const textoVariavel = match[1]; // texto
+                const fullMatch = match[0]; // {{texto}}
+                const textInside = match[1]; // texto
                 
                 // Verificar se esse texto já está dentro de uma tag <var>
-                const isInsideVarTag = htmlString.indexOf(`<var>${textoCompleto}</var>`) !== -1;
+                const isInsideVarTag = htmlString.indexOf(`<var>${fullMatch}</var>`) !== -1;
                 
                 if (!isInsideVarTag) {
-                    // Verificar se há underscores e substituí-los por hífens
-                    if (textoVariavel.includes('_')) {
-                        const textoLimpo = textoVariavel.replace(/[_]+/g, '-');
-                        
-                        // Criar o novo texto com hífens
-                        const novoTextoCompleto = `{{${textoLimpo}}}`;
-                        
-                        // Substituir a ocorrência no novo conteúdo
-                        novoConteudo = novoConteudo.replace(textoCompleto, `<var>${novoTextoCompleto}</var>`);
-                        alterado = true;
-                    } else {
-                        // Adicionar a tag <var> se não tiver underscores
-                        novoConteudo = novoConteudo.replace(textoCompleto, `<var>${textoCompleto}</var>`);
-                        alterado = true;
-                    }
+                    // Limpar e formatar o texto conforme as regras (substituir espaços e _ por -)
+                    const cleanText = textInside
+                        .replace(/[^\w\s]/g, '')
+                        .replace(/[\s_]+/g, '-');
+                    
+                    // Substituir a ocorrência no editor
+                    this.richEditor.commands.setContent(
+                        htmlValue.replace(
+                            fullMatch, 
+                            `<var>{{${cleanText}}}</var>`
+                        )
+                    );
                 }
             }
             
-            // Aplicar as alterações apenas se algo foi modificado, preservando a posição do cursor
-            if (alterado && novoConteudo !== htmlString) {
-                alteracaoRealizada = true;
-                
-                // Aplicar as alterações
-                editor.commands.setContent(novoConteudo);
-                
-                // Restaurar a posição do cursor após a atualização do conteúdo
-                setTimeout(() => {
-                    // Tenta restaurar a posição do cursor
-                    editor.commands.setTextSelection(posicaoAtual);
-                }, 0);
-            }
+            this.extractVariables(htmlValue);
             
-            // Extrair variáveis
-            this.extractVariables(editor.getHTML());
-            
-            // Configurar eventos de trigger com debounce se necessário
             if (this.content.debounce) {
                 this.isDebouncing = true;
-                if (this.debounceTimeoutId) {
-                    clearTimeout(this.debounceTimeoutId);
+                if (this.debounce) {
+                    clearTimeout(this.debounce);
                 }
-                this.debounceTimeoutId = setTimeout(() => {
+                this.debounce = setTimeout(() => {
                     this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
                     this.isDebouncing = false;
                 }, this.delay);
             } else {
                 this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
             }
+            this.setMentions(this.richEditor.getJSON().content.reduce(extractMentions, []));
             
-            // Processar menções
-            this.setMentions(editor.getJSON().content?.reduce(extractMentions, []) || []);
+            // Forçar a normalização de variáveis após qualquer atualização
+            this.normalizarVariaveis();
+        },
+        setLink(url) {
+            if (this.richEditor.isActive('link')) {
+                this.richEditor.chain().focus().unsetLink().run();
+                return;
+            }
+
+            const previousUrl = this.richEditor.getAttributes('link').href;
+            const selectedUrl = url ?? window.prompt('URL', previousUrl);
+
+            // cancelled
+            if (selectedUrl === null) {
+                return;
+            }
+
+            // empty
+            if (selectedUrl === '') {
+                this.richEditor.chain().focus().extendMarkRange('link').unsetLink().run();
+
+                return;
+            }
+
+            // update link
+            this.richEditor.chain().focus().extendMarkRange('link').setLink({ href: selectedUrl }).run();
+        },
+        setImage(src, alt = '', title = '') {
+            if (this.content.customMenu) this.richEditor.commands.setImage({ src, alt, title });
+            else {
+                let url;
+                /* wwEditor:start */
+                url = wwLib.getEditorWindow().prompt('Image URL');
+                /* wwEditor:end */
+                /* wwFront:start */
+                url = wwLib.getFrontWindow().prompt('Image URL');
+                /* wwFront:end */
+
+                if (!url) return;
+                this.richEditor.chain().focus().setImage({ src: url }).run();
+            }
+        },
+        focusEditor() {
+            this.richEditor.chain().focus().run();
+        },
+        setTag(tag) {
+            if (typeof tag === 'string') {
+                tag = tag.toLocaleLowerCase().trim();
+                if (tag in TAGS_MAP) tag = TAGS_MAP[tag];
+            }
+            if (tag === 0) this.richEditor.chain().focus().setParagraph().run();
+            if (tag !== 0)
+                this.richEditor
+                    .chain()
+                    .focus()
+                    .toggleHeading({ level: Number(tag) })
+                    .run();
+        },
+        toggleBold() {
+            this.richEditor.chain().focus().toggleBold().run();
+        },
+        toggleItalic() {
+            this.richEditor.chain().focus().toggleItalic().run();
+        },
+        toggleStrike() {
+            this.richEditor.chain().focus().toggleStrike().run();
+        },
+        setTextAlign(textAlign) {
+            this.richEditor.chain().focus().setTextAlign(textAlign).run();
+        },
+        setColor(color) {
+            this.richEditor.chain().focus().setColor(color).run();
+        },
+        toggleBulletList() {
+            this.richEditor.chain().focus().toggleBulletList().run();
+        },
+        toggleOrderedList() {
+            this.richEditor.chain().focus().toggleOrderedList().run();
+        },
+        toggleTaskList() {
+            this.richEditor.chain().focus().toggleTaskList().run();
+        },
+        toggleCodeBlock() {
+            this.richEditor.chain().focus().toggleCodeBlock().run();
+        },
+        toggleBlockquote() {
+            this.richEditor.chain().focus().toggleBlockquote().run();
+        },
+        toggleVar() {
+            if (!this.richEditor) {
+                return;
+            }
+
+            // Obtém o texto selecionado atualmente
+            const { state } = this.richEditor;
+            const { from, to } = state.selection;
+            const selectedText = state.doc.textBetween(from, to, '');
             
-            // Se não houve alteração, garante que o evento de mudança é disparado
-            if (!alteracaoRealizada) {
-                this.$emit('update:content', { text: this.extractVariables(htmlValue) });
-                this.$emit('trigger-change', { value: htmlValue });
+            // Verifica se há texto selecionado
+            if (selectedText.length > 0) {
+                // Limpa o texto: substitui espaços e underscores por hífens, remove outros símbolos
+                const cleanText = selectedText
+                    .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
+                    .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
+                
+                // Verifica se o texto já está no formato {{texto}}
+                if (selectedText.startsWith('{{') && selectedText.endsWith('}}')) {
+                    // Apenas aplica a tag var
+                    this.richEditor.chain().focus().toggleVar().run();
+                } else {
+                    // Se não estiver no formato correto, envolve o texto com {{}}
+                    const formattedText = '{{' + cleanText + '}}';
+                    
+                    // Substitui o texto selecionado pelo texto formatado
+                    this.richEditor.chain()
+                        .focus()
+                        .deleteSelection()
+                        .insertContent(formattedText)
+                        .setTextSelection({
+                            from: from,
+                            to: from + formattedText.length
+                        })
+                        .run();
+                    
+                    // Aplica a tag var ao novo texto
+                    this.richEditor.chain()
+                        .focus()
+                        .toggleVar()
+                        .run();
+                }
+            } else {
+                // Se não houver texto selecionado, apenas aplica a tag var
+                this.richEditor.chain().focus().toggleVar().run();
+            }
+        },
+        toggleUnderline() {
+            this.richEditor.chain().focus().toggleMark('underline').run();
+        },
+        undo() {
+            this.richEditor.chain().undo().run();
+        },
+        redo() {
+            this.richEditor.chain().redo().run();
+        },
+        getContent() {
+            if (this.content.output === 'markdown') return this.richEditor.storage.markdown.getMarkdown();
+            return this.richEditor.getHTML();
+        },
+        /* Table */
+        insertTable() {
+            this.richEditor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+        },
+        insertRow(direction) {
+            direction === 'before'
+                ? this.richEditor.chain().focus().addRowBefore().run()
+                : this.richEditor.chain().focus().addRowAfter().run();
+        },
+        insertColumn(direction) {
+            direction === 'before'
+                ? this.richEditor.chain().focus().addColumnBefore().run()
+                : this.richEditor.chain().focus().addColumnAfter().run();
+        },
+        deleteRow() {
+            this.richEditor.chain().focus().deleteRow().run();
+        },
+        deleteColumn() {
+            this.richEditor.chain().focus().deleteColumn().run();
+        },
+        deleteTable() {
+            this.richEditor.chain().focus().deleteTable().run();
+        },
+        initContent(newContent) {
+            this.richEditor.commands.setContent(newContent);
+        },
+        extractVariables(htmlContent) {
+            if (!htmlContent || typeof htmlContent !== 'string') return;
+            
+            // Função para normalizar variáveis
+            const normalizeVar = (rawVar) => {
+                return rawVar.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            };
+
+            // Nova função para extrair variáveis com segurança, evitando problemas com chaves aninhadas
+            const extrairVariaveis = (texto) => {
+                const resultado = [];
+                let i = 0;
+                
+                while (i < texto.length - 1) {
+                    // Procura pelo início de uma variável
+                    if (texto[i] === '{' && texto[i+1] === '{') {
+                        const inicioVar = i;
+                        i += 2; // Pula as chaves de abertura
+                        
+                        // Procura pelo fim da variável atual
+                        let fimVar = -1;
+                        while (i < texto.length - 1) {
+                            if (texto[i] === '}' && texto[i+1] === '}') {
+                                fimVar = i;
+                                break;
+                            }
+                            
+                            // Se encontrar outra abertura de variável antes do fechamento,
+                            // significa que a variável atual não é válida
+                            if (texto[i] === '{' && texto[i+1] === '{') {
+                                // Variável inválida, abandonamos esta busca
+                                fimVar = -1;
+                                break;
+                            }
+                            
+                            i++;
+                        }
+                        
+                        // Se encontrou um fechamento válido
+                        if (fimVar !== -1) {
+                            const conteudoVar = texto.substring(inicioVar + 2, fimVar);
+                            resultado.push({
+                                variavel: `{{${conteudoVar}}}`,
+                                conteudo: conteudoVar
+                            });
+                            i = fimVar + 2; // Avança para depois do fechamento
+                        } else {
+                            // Se não encontrou fechamento, avança apenas um caractere
+                            i = inicioVar + 1;
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+                
+                return resultado;
+            };
+            
+            // Extrai todas as variáveis do conteúdo
+            const variaveisEncontradas = extrairVariaveis(htmlContent);
+            
+            // Dicionário para guardar as variáveis normalizadas
+            const dictionary = {};
+            const order = [];
+            
+            // Processa cada variável encontrada
+            variaveisEncontradas.forEach((item) => {
+                const normalizado = normalizeVar(item.conteudo);
+                const varStr = `{{${normalizado}}}`;
+                
+                if (!dictionary[varStr]) {
+                    dictionary[varStr] = {
+                        tipo: "text",
+                        value: null,
+                        requerid: false,
+                        variavel: varStr,
+                        inputNome: null,
+                        repetido: 1
+                    };
+                    order.push(varStr);
+                } else {
+                    dictionary[varStr].repetido++;
+                }
+            });
+            
+            // Formata o resultado 
+            const resultado = order.map((key) => {
+                return {
+                    ...dictionary[key],
+                    repetido: dictionary[key].repetido.toString()
+                };
+            });
+
+            // Cria um array com as variáveis extraídas (no formato similar a mentions)
+            const variablesArray = order.map((key, index) => {
+                const item = dictionary[key];
+                const name = item.variavel.replace(/[{}]/g, '');
+                return {
+                    id: index + 1, // ID numérico e automático, começando em 1
+                    name: name,
+                    tipo: item.tipo,
+                    value: item.value,
+                    required: item.requerid,
+                    variavel: item.variavel,
+                    inputNome: item.inputNome,
+                    repetido: item.repetido.toString()
+                };
+            });
+
+            // Atualiza a variável nativa 'variables'
+            this.setVariables(variablesArray);
+
+            // Atualiza a propriedade inputsForm, se estiver definida
+            if (this.content.inputsForm) {
+                this.$emit('update:content', {
+                    ...this.content,
+                    inputsForm: resultado
+                });
             }
         },
         capturarSelecao(editor) {
@@ -1724,7 +1700,7 @@ export default {
         replaceText(originalText, replacementText) {
             if (!this.richEditor || !originalText) return;
             
-            // Obtém o conteúdo atual do editor
+            // Obter o conteúdo atual do editor
             const conteudoAtual = this.richEditor.getHTML();
             
             // Realiza a substituição
@@ -1887,143 +1863,60 @@ export default {
             }
         },
         normalizarVariaveis() {
-            try {
-                // Obter o conteúdo atual do editor
-                const conteudo = this.getContent();
-                if (!conteudo) return;
+            if (!this.richEditor) return;
+            
+            // Verificar e modificar o conteúdo HTML diretamente
+            const conteudoAtual = this.richEditor.getHTML();
+            
+            // Regex para encontrar todas as variáveis no formato {{texto}} ou <var>{{texto}}</var>
+            const regexVariaveis = /<var>\{\{([^{}]+)\}\}<\/var>|\{\{([^{}]+)\}\}/g;
+            
+            let conteudoModificado = conteudoAtual;
+            let match;
+            let foiModificado = false;
+            
+            // Função auxiliar para limpar e formatar o texto da variável
+            const formatarTextoVariavel = (texto) => {
+                return texto.replace(/[_]+/g, '-');
+            };
+            
+            // Substituir todas as ocorrências
+            while ((match = regexVariaveis.exec(conteudoAtual)) !== null) {
+                const textoCompleto = match[0]; // <var>{{texto}}</var> ou {{texto}}
+                const textoVariavel = match[1] || match[2]; // texto dentro das chaves
                 
-                // Salvar posição atual do cursor antes de qualquer modificação
-                const posicaoAtual = this.richEditor.state.selection.anchor;
-                
-                this.setValue(conteudo);
-                
-                // Flag para verificar se alguma alteração foi feita
-                let alteracaoRealizada = false;
-                
-                // Verificar todos os nós que contêm a tag <var>
-                this.richEditor.view.state.doc.descendants((node, pos) => {
-                    if (node.type.name === 'var') {
-                        // Obter o texto dentro da tag <var>
-                        const varContent = this.richEditor.view.state.doc.textBetween(pos, pos + node.nodeSize, '');
-                        
-                        // Verificar se o texto está no formato {{texto}}
-                        if (!(varContent.startsWith('{{') && varContent.endsWith('}}'))) {
-                            // Se não estiver no formato correto, remover a tag <var>
-                            this.richEditor.chain()
-                                .setTextSelection({ from: pos, to: pos + node.nodeSize })
-                                .unsetVar()
-                                .run();
-                            alteracaoRealizada = true;
-                        } else {
-                            // Verificar se tem underscores e substituí-los por hífens
-                            if (varContent.includes('_')) {
-                                const textoSemChaves = varContent.substring(2, varContent.length - 2);
-                                const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
-                                
-                                if (textoSemChaves !== textoLimpo) {
-                                    // Substituir o conteúdo com underscores por hífens
-                                    const posAntesEdicao = this.richEditor.state.selection.anchor;
-                                    
-                                    this.richEditor.chain()
-                                        .setTextSelection({ from: pos, to: pos + node.nodeSize })
-                                        .deleteSelection()
-                                        .insertContent(`<var>{{${textoLimpo}}}</var>`)
-                                        .run();
-                                        
-                                    alteracaoRealizada = true;
-                                    
-                                    // Calcular ajuste da posição do cursor após edição
-                                    if (pos < posAntesEdicao) {
-                                        // Se a edição foi antes do cursor, ajustar a diferença
-                                        const diff = textoLimpo.length - textoSemChaves.length;
-                                        // Restaurar cursor com ajuste se necessário
-                                        setTimeout(() => {
-                                            this.richEditor.commands.setTextSelection(posAntesEdicao + diff);
-                                        }, 0);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return true;
-                });
-                
-                // Formatar qualquer {{texto}} que não tenha a tag <var>
-                const htmlString = conteudo.toString();
-                const varPattern = /\{\{([^{}]+)\}\}/g;
-                let match;
-                let alterado = false;
-                
-                // Criar uma cópia do conteúdo original para manipulação
-                let novoConteudo = htmlString;
-                
-                while ((match = varPattern.exec(htmlString)) !== null) {
-                    const textoCompleto = match[0]; // {{texto}}
-                    const textoVariavel = match[1]; // texto
+                if (textoVariavel.includes('_')) {
+                    const textoFormatado = formatarTextoVariavel(textoVariavel);
                     
-                    // Verificar se esse texto já está dentro de uma tag <var>
-                    const isInsideVarTag = htmlString.indexOf(`<var>${textoCompleto}</var>`) !== -1;
+                    // Determinar se a variável tem a tag <var>
+                    const temTagVar = textoCompleto.startsWith('<var>');
                     
-                    if (!isInsideVarTag) {
-                        // Verificar se há underscores e substituí-los por hífens
-                        if (textoVariavel.includes('_')) {
-                            const textoLimpo = textoVariavel.replace(/[_]+/g, '-');
-                            
-                            // Criar o novo texto com hífens
-                            const novoTextoCompleto = `{{${textoLimpo}}}`;
-                            
-                            // Substituir a ocorrência no novo conteúdo
-                            novoConteudo = novoConteudo.replace(textoCompleto, `<var>${novoTextoCompleto}</var>`);
-                            alterado = true;
-                        } else {
-                            // Adicionar a tag <var> se não tiver underscores
-                            novoConteudo = novoConteudo.replace(textoCompleto, `<var>${textoCompleto}</var>`);
-                            alterado = true;
-                        }
-                    }
-                }
-                
-                // Aplicar as alterações apenas se algo foi modificado, preservando a posição do cursor
-                if (alterado && novoConteudo !== htmlString) {
-                    alteracaoRealizada = true;
+                    // Criar a substituição apropriada
+                    const substituicao = temTagVar 
+                        ? `<var>{{${textoFormatado}}}</var>` 
+                        : `{{${textoFormatado}}}`;
                     
-                    // Aplicar as alterações
-                    this.richEditor.commands.setContent(novoConteudo);
-                    
-                    // Restaurar a posição do cursor após a atualização do conteúdo
-                    setTimeout(() => {
-                        // Tenta restaurar a posição do cursor
-                        this.richEditor.commands.setTextSelection(posicaoAtual);
-                    }, 0);
+                    // Substituir no conteúdo
+                    conteudoModificado = conteudoModificado.replace(textoCompleto, substituicao);
+                    foiModificado = true;
                 }
+            }
+            
+            // Se houve modificações, atualizar o editor
+            if (foiModificado) {
+                // Salvar a posição do cursor antes da modificação
+                const { state } = this.richEditor.view;
+                const selecao = { from: state.selection.from, to: state.selection.to };
                 
-                // Extrair variáveis
-                this.extractVariables(this.richEditor.getHTML());
+                // Atualizar o conteúdo
+                this.richEditor.commands.setContent(conteudoModificado);
                 
-                // Configurar eventos de trigger com debounce se necessário
-                if (this.content.debounce) {
-                    this.isDebouncing = true;
-                    if (this.debounceTimeoutId) {
-                        clearTimeout(this.debounceTimeoutId);
-                    }
-                    this.debounceTimeoutId = setTimeout(() => {
-                        this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
-                        this.isDebouncing = false;
-                    }, this.delay);
-                } else {
-                    this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
-                }
+                // Tentar restaurar a posição do cursor
+                this.richEditor.commands.setTextSelection(selecao);
                 
-                // Processar menções
-                this.setMentions(this.richEditor.getJSON().content?.reduce(extractMentions, []) || []);
-                
-                // Se não houve alteração, garante que o evento de mudança é disparado
-                if (!alteracaoRealizada) {
-                    this.$emit('update:content', { text: this.extractVariables(conteudo) });
-                    this.$emit('trigger-change', { value: conteudo });
-                }
-            } catch (error) {
-                console.error('Erro ao normalizar variáveis:', error);
+                // Emitir eventos
+                this.$emit('update:content', { text: this.extractVariables(conteudoModificado) });
+                this.$emit('trigger-change', { value: conteudoModificado });
             }
         },
     },
