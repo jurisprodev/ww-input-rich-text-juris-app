@@ -1097,47 +1097,9 @@ export default {
                 parseOptions: {
                     preserveWhitespace: false,
                 },
-                onPaste: () => {
-                    // Agendar a normalização de variáveis após a colagem
-                    setTimeout(() => {
-                        this.normalizarVariaveis();
-                    }, 100);
-                    // Continuar com o comportamento padrão
-                    return false;
-                },
             });
             
             this.loading = false;
-            
-            // Adicionar manipulador global de colagem apenas para texto plano
-            if (this.$el && this.$el.querySelector('.ProseMirror')) {
-                const editor = this.$el.querySelector('.ProseMirror');
-                
-                // Adicionar evento de colagem diretamente ao elemento do editor
-                editor.addEventListener('paste', (event) => {
-                    // Prevenir comportamento padrão
-                    event.preventDefault();
-                    event.stopPropagation();
-                    
-                    // Obter apenas texto plano
-                    const textoPlano = event.clipboardData.getData('text/plain');
-                    
-                    if (textoPlano) {
-                        // Método 1: usar document.execCommand (compatível com mais navegadores)
-                        if (document.queryCommandSupported('insertText')) {
-                            document.execCommand('insertText', false, textoPlano);
-                        } 
-                        // Método 2: fallback para TipTap API
-                        else if (this.richEditor) {
-                            this.richEditor.commands.insertContent(textoPlano, {
-                                parseOptions: { preserveWhitespace: true }
-                            });
-                        }
-                    }
-                    
-                    return false;
-                }, true);
-            }
             
             // Força o foco no editor após carregar
             setTimeout(() => {
@@ -1198,17 +1160,32 @@ export default {
                 
                 if (!isInsideVarTag) {
                     // Limpar e formatar o texto conforme as regras (substituir espaços e _ por -)
-                    const cleanText = textInside
-                        .replace(/[^\w\s]/g, '')
-                        .replace(/[\s_]+/g, '-');
+                    let textoProcessado = textInside;
                     
-                    // Substituir a ocorrência no editor
-                    this.richEditor.commands.setContent(
-                        htmlValue.replace(
-                            fullMatch, 
-                            `<var>{{${cleanText}}}</var>`
-                        )
-                    );
+                    // Se não tiver {{, envolve o texto com {{}}
+                    if (!textoProcessado.includes('{{')) {
+                        // Substituir espaços por traços
+                        textoProcessado = textoProcessado.replace(/\s+/g, '-');
+                        
+                        // Inserir o conteúdo com chaves e posicionar o cursor após a variável inserida
+                        this.richEditor.chain()
+                            .focus()
+                            .deleteSelection()
+                            .insertContent(`{{${textoProcessado}}}`)
+                            .run();
+                    } else {
+                        // Se já está entre chaves, só garantir que espaços são substituídos por traços
+                        const textoSemChaves = textoProcessado.substring(2, textoProcessado.length - 2);
+                        const textoLimpo = textoSemChaves.replace(/\s+/g, '-');
+                        
+                        this.richEditor.chain()
+                            .focus()
+                            .deleteSelection()
+                            .insertContent(`{{${textoLimpo}}}`)
+                            .run();
+                        
+                        textoProcessado = textoLimpo;
+                    }
                 }
             }
             
