@@ -1720,11 +1720,11 @@ export default {
             if (!this.richEditor) return;
             
             // Salvamos a seleção atual para restaurar depois
-            const { state } = this.richEditor;
-            const { selection } = state;
+            const { state } = this.richEditor.view;
+            const selecao = { from: state.selection.from, to: state.selection.to };
             
             try {
-                // Obtém o HTML atual
+                // Obtem o HTML atual
                 const htmlAtual = this.richEditor.getHTML();
                 
                 // Cria um elemento temporário para manipular o HTML
@@ -1833,7 +1833,7 @@ export default {
                     
                     // Tentar restaurar a seleção se possível
                     try {
-                        this.richEditor.commands.setTextSelection(selection);
+                        this.richEditor.commands.setTextSelection(selecao);
                     } catch (e) {
                         console.warn('Não foi possível restaurar a seleção após limpeza:', e);
                     }
@@ -1856,8 +1856,9 @@ export default {
             let foiModificado = false;
             
             // Função auxiliar para limpar e formatar o texto da variável
+            // Usamos a mesma lógica de normalizeVar na função extractVariables
             const formatarTextoVariavel = (texto) => {
-                return texto.replace(/[_]+/g, '-');
+                return texto.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             };
             
             // Substituir todas as ocorrências
@@ -1865,18 +1866,19 @@ export default {
                 const textoCompleto = match[0]; // <var>{{texto}}</var> ou {{texto}}
                 const textoVariavel = match[1] || match[2]; // texto dentro das chaves
                 
-                if (textoVariavel.includes('_')) {
-                    const textoFormatado = formatarTextoVariavel(textoVariavel);
-                    
-                    // Determinar se a variável tem a tag <var>
-                    const temTagVar = textoCompleto.startsWith('<var>');
-                    
-                    // Criar a substituição apropriada
-                    const substituicao = temTagVar 
-                        ? `<var>{{${textoFormatado}}}</var>` 
-                        : `{{${textoFormatado}}}`;
-                    
-                    // Substituir no conteúdo
+                // Formatamos todas as variáveis para garantir consistência
+                const textoFormatado = formatarTextoVariavel(textoVariavel);
+                
+                // Determinar se a variável tem a tag <var>
+                const temTagVar = textoCompleto.startsWith('<var>');
+                
+                // Criar a substituição apropriada
+                const substituicao = temTagVar 
+                    ? `<var>{{${textoFormatado}}}</var>` 
+                    : `{{${textoFormatado}}}`;
+                
+                // Substituir apenas se o texto original for diferente do formatado
+                if (textoFormatado !== textoVariavel) {
                     conteudoModificado = conteudoModificado.replace(textoCompleto, substituicao);
                     foiModificado = true;
                 }
