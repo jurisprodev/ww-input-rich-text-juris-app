@@ -1029,7 +1029,7 @@ export default {
                     // Apenas aplica a tag var
                     this.richEditor.chain().focus().toggleVar().run();
                 } else {
-                    // Substitui espaços por hífens e adiciona {{}}
+                    // Se não tiver {{, envolve o texto com {{}}
                     const formattedText = '{{' + selectedText.replace(/\s+/g, '-') + '}}';
                     
                     // Substitui o texto selecionado pelo texto formatado
@@ -1101,23 +1101,68 @@ export default {
                 return rawVar.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             };
 
-            // Atualiza o conteúdo HTML substituindo as variáveis pelo formato normalizado
-            let htmlContentAtualizado = htmlContent.replace(/{{(.*?)}}/g, (match, group1) => {
-                let normalized = normalizeVar(group1);
-                return `{{${normalized}}}`;
-            });
-
-            // Extrai todas as variáveis únicas e conta as repetições
-            const regex = /{{(.*?)}}/g;
-            let match;
+            // Nova função para extrair variáveis com segurança, evitando problemas com chaves aninhadas
+            const extrairVariaveis = (texto) => {
+                const resultado = [];
+                let i = 0;
+                
+                while (i < texto.length - 1) {
+                    // Procura pelo início de uma variável
+                    if (texto[i] === '{' && texto[i+1] === '{') {
+                        const inicioVar = i;
+                        i += 2; // Pula as chaves de abertura
+                        
+                        // Procura pelo fim da variável atual
+                        let fimVar = -1;
+                        while (i < texto.length - 1) {
+                            if (texto[i] === '}' && texto[i+1] === '}') {
+                                fimVar = i;
+                                break;
+                            }
+                            
+                            // Se encontrar outra abertura de variável antes do fechamento,
+                            // significa que a variável atual não é válida
+                            if (texto[i] === '{' && texto[i+1] === '{') {
+                                // Variável inválida, abandonamos esta busca
+                                fimVar = -1;
+                                break;
+                            }
+                            
+                            i++;
+                        }
+                        
+                        // Se encontrou um fechamento válido
+                        if (fimVar !== -1) {
+                            const conteudoVar = texto.substring(inicioVar + 2, fimVar);
+                            resultado.push({
+                                variavel: `{{${conteudoVar}}}`,
+                                conteudo: conteudoVar
+                            });
+                            i = fimVar + 2; // Avança para depois do fechamento
+                        } else {
+                            // Se não encontrou fechamento, avança apenas um caractere
+                            i = inicioVar + 1;
+                        }
+                    } else {
+                        i++;
+                    }
+                }
+                
+                return resultado;
+            };
+            
+            // Extrai todas as variáveis do conteúdo
+            const variaveisEncontradas = extrairVariaveis(htmlContent);
+            
+            // Dicionário para guardar as variáveis normalizadas
             const dictionary = {};
             const order = [];
-
-            while ((match = regex.exec(htmlContentAtualizado)) !== null) {
-                let rawVar = match[1].trim();
-                let normalized = normalizeVar(rawVar);
-                let varStr = `{{${normalized}}}`;
-
+            
+            // Processa cada variável encontrada
+            variaveisEncontradas.forEach((item) => {
+                const normalizado = normalizeVar(item.conteudo);
+                const varStr = `{{${normalizado}}}`;
+                
                 if (!dictionary[varStr]) {
                     dictionary[varStr] = {
                         tipo: "text",
@@ -1131,8 +1176,8 @@ export default {
                 } else {
                     dictionary[varStr].repetido++;
                 }
-            }
-
+            });
+            
             // Formata o resultado 
             const resultado = order.map((key) => {
                 return {
@@ -1140,11 +1185,6 @@ export default {
                     repetido: dictionary[key].repetido.toString()
                 };
             });
-
-            // Atualiza o conteúdo no editor se foi alterado
-            if (htmlContentAtualizado !== htmlContent) {
-                this.setValue(htmlContentAtualizado);
-            }
 
             // Cria um array com as variáveis extraídas (no formato similar a mentions)
             const variablesArray = order.map((key, index) => {
@@ -1289,21 +1329,27 @@ export default {
                     return false;
                 }
                 
+                // Salvar a posição atual do cursor
+                const { state } = this.richEditor;
+                const currentPos = state.selection.anchor;
+                
                 // Inserir o texto como uma variável usando o comportamento existente
                 // Se o texto já estiver entre {{}} ele será automaticamente reconhecido como variável
                 if (!textoSelecionado.includes('{{')) {
                     // Se não tiver {{, envolve o texto com {{}}
                     this.richEditor.chain()
-                        .focus()
                         .insertContent(`{{${textoSelecionado}}}`)
                         .run();
                 } else {
                     // Se já tiver {{ no texto, apenas insere normalmente
                     this.richEditor.chain()
-                        .focus()
                         .insertContent(textoSelecionado)
                         .run();
                 }
+                
+                // Restaurar a posição do cursor para o final da variável inserida
+                // em vez de mover para o final do documento
+                this.richEditor.commands.setTextSelection(currentPos + textoSelecionado.length + 4);
                 
                 // Atualizar a lista de variáveis
                 const novasVariaveis = this.extractVariables(this.getContent());
@@ -1348,43 +1394,29 @@ export default {
                     const removerFormatacaoFonte = (elemento) => {
                         if (!elemento) return;
                         
-                        // Remover atributos de estilo de fonte
+                        // Remover atributos de estilo de fonte completamente
                         if (elemento.style) {
                             elemento.style.fontFamily = '';
                             elemento.style.fontSize = '';
                             elemento.style.font = '';
+                            elemento.style.color = '';
+                            elemento.style.backgroundColor = '';
+                            elemento.style.lineHeight = '';
+                            elemento.style.letterSpacing = '';
+                            elemento.style.wordSpacing = '';
+                            elemento.style.textIndent = '';
                         }
                         
-                        // Remover atributos específicos de fonte
-                        elemento.removeAttribute('face');
-                        elemento.removeAttribute('size');
+                        // Remover vários atributos relacionados a formatação
+                        const atributosParaRemover = [
+                            'face', 'size', 'color', 'bgcolor', 'style',
+                            'class', 'align', 'valign', 'data-mce-style',
+                            'data-font', 'data-size', 'data-color'
+                        ];
                         
-                        // Remover estilos inline relacionados a fontes
-                        const estilo = elemento.getAttribute('style');
-                        if (estilo) {
-                            let novoEstilo = estilo
-                                .replace(/font-family:[^;]+;?/gi, '')
-                                .replace(/font-size:[^;]+;?/gi, '')
-                                .replace(/font:[^;]+;?/gi, '')
-                                .replace(/\s+/g, ' ')
-                                .trim();
-                                
-                            if (novoEstilo) {
-                                elemento.setAttribute('style', novoEstilo);
-                            } else {
-                                elemento.removeAttribute('style');
-                            }
-                        }
-                        
-                        // Remover classes relacionadas a fontes
-                        const classe = elemento.getAttribute('class');
-                        if (classe && (
-                            classe.includes('font') || 
-                            classe.includes('text-') || 
-                            classe.includes('size')
-                        )) {
-                            elemento.removeAttribute('class');
-                        }
+                        atributosParaRemover.forEach(attr => {
+                            elemento.removeAttribute(attr);
+                        });
                         
                         // Processar filhos recursivamente
                         Array.from(elemento.children || []).forEach(removerFormatacaoFonte);
@@ -1393,17 +1425,56 @@ export default {
                     // Processar todos os elementos
                     removerFormatacaoFonte(div);
                     
-                    // Converter todas as tags de fonte em spans
-                    const fontTags = div.querySelectorAll('font');
-                    fontTags.forEach(fontTag => {
+                    // Converter tags específicas em elementos neutros
+                    const seletoresTagsParaConverter = 'font, span[style], b[style], i[style], u[style], s[style], strong[style], em[style]';
+                    const tagsParaConverter = div.querySelectorAll(seletoresTagsParaConverter);
+                    
+                    tagsParaConverter.forEach(tag => {
+                        // Se a tag não tem conteúdo de texto, mais eficiente apenas removê-la
+                        if (!tag.textContent.trim()) {
+                            if (tag.parentNode) {
+                                tag.parentNode.removeChild(tag);
+                            }
+                            return;
+                        }
+                        
+                        // Para tags com conteúdo, substituir por span limpo
                         const span = document.createElement('span');
-                        span.innerHTML = fontTag.innerHTML;
-                        fontTag.parentNode.replaceChild(span, fontTag);
+                        span.innerHTML = tag.innerHTML;
+                        
+                        if (tag.parentNode) {
+                            tag.parentNode.replaceChild(span, tag);
+                        }
                     });
+                    
+                    // Simplificar elementos aninhados desnecessariamente
+                    const simplificarElementos = (elemento) => {
+                        if (!elemento || !elemento.children || elemento.children.length === 0) return;
+                        
+                        Array.from(elemento.children).forEach(filho => {
+                            // Primeiro simplifica recursivamente os filhos
+                            simplificarElementos(filho);
+                            
+                            // Se o filho é um span sem atributos e seu pai também é um elemento de formatação
+                            if (filho.tagName.toLowerCase() === 'span' && 
+                                !filho.attributes.length && 
+                                ['span', 'p', 'div'].includes(elemento.tagName.toLowerCase())) {
+                                // Mover o conteúdo do filho para o pai
+                                while (filho.firstChild) {
+                                    elemento.insertBefore(filho.firstChild, filho);
+                                }
+                                // Remover o filho vazio
+                                elemento.removeChild(filho);
+                            }
+                        });
+                    };
+                    
+                    // Simplificar a estrutura do HTML
+                    simplificarElementos(div);
                     
                     // Obter o HTML limpo
                     const htmlLimpo = div.innerHTML;
-                    console.log('Colando HTML com formatações de fonte removidas');
+                    console.log('Colando HTML com todas as formatações removidas');
                     
                     // Inserir o HTML limpo no editor
                     this.richEditor.commands.insertContent(htmlLimpo);
