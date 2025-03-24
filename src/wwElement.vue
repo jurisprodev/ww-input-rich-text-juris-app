@@ -1305,18 +1305,24 @@ export default {
             
             // Verifica se há texto selecionado
             if (selectedText.length > 0) {
-                // Limpa o texto: substitui espaços e underscores por hífens, remove outros símbolos
-                const cleanText = selectedText
-                    .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
-                    .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
+                // Função para normalizar caracteres (remover acentos e caracteres especiais)
+                const normalizarTexto = (texto) => {
+                    // Remover acentos e caracteres especiais
+                    const semAcentos = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    // Converter para minúsculas e substituir caracteres não alfanuméricos por hífens
+                    return semAcentos.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                };
                 
                 // Verifica se o texto já está no formato {{texto}}
                 if (selectedText.startsWith('{{') && selectedText.endsWith('}}')) {
                     // Apenas aplica a tag var
                     this.richEditor.chain().focus().toggleVar().run();
                 } else {
-                    // Se não estiver no formato correto, envolve o texto com {{}}
-                    const formattedText = '{{' + cleanText + '}}';
+                    // Normaliza o texto selecionado (remove acentos e substitui caracteres especiais)
+                    const textoNormalizado = normalizarTexto(selectedText);
+                    
+                    // Envolve o texto normalizado com {{}}
+                    const formattedText = '{{' + textoNormalizado + '}}';
                     
                     // Substitui o texto selecionado pelo texto formatado
                     this.richEditor.chain()
@@ -1384,7 +1390,10 @@ export default {
             
             // Função para normalizar variáveis
             const normalizeVar = (rawVar) => {
-                return rawVar.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                // Remover acentos e caracteres especiais
+                const semAcentos = rawVar.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                // Converter para minúsculas e substituir caracteres não alfanuméricos por hífens
+                return semAcentos.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             };
 
             // Nova função para extrair variáveis com segurança, evitando problemas com chaves aninhadas
@@ -1608,13 +1617,21 @@ export default {
                     return false;
                 }
                 
-                // Processar o texto antes de inseri-lo (substituir espaços por traços)
+                // Função para normalizar caracteres (remover acentos e substituir espaços por traços)
+                const normalizarTexto = (texto) => {
+                    // Remover acentos e caracteres especiais
+                    const semAcentos = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                    // Substituir espaços e caracteres especiais por traços
+                    return semAcentos.toLowerCase().trim().replace(/[^a-zA-Z0-9]+/g, '-');
+                };
+                
+                // Processar o texto antes de inseri-lo
                 let textoProcessado = textoSelecionado;
                 
                 // Se não tiver {{, envolve o texto com {{}}
                 if (!textoProcessado.includes('{{')) {
-                    // Substituir espaços por traços
-                    textoProcessado = textoProcessado.replace(/\s+/g, '-');
+                    // Normalizar o texto (remover acentos e substituir espaços por traços)
+                    textoProcessado = normalizarTexto(textoProcessado).toLowerCase();
                     
                     // Inserir o conteúdo com chaves e posicionar o cursor após a variável inserida
                     this.richEditor.chain()
@@ -1623,9 +1640,9 @@ export default {
                         .insertContent(`{{${textoProcessado}}}`)
                         .run();
                 } else {
-                    // Se já está entre chaves, só garantir que espaços são substituídos por traços
+                    // Se já está entre chaves, só garantir que o texto está normalizado
                     const textoSemChaves = textoProcessado.substring(2, textoProcessado.length - 2);
-                    const textoLimpo = textoSemChaves.replace(/\s+/g, '-');
+                    const textoLimpo = normalizarTexto(textoSemChaves).toLowerCase();
                     
                     this.richEditor.chain()
                         .focus()
@@ -1636,7 +1653,7 @@ export default {
                     textoProcessado = textoLimpo;
                 }
                 
-                // Forçar o foco no editor e posicionar o cursor logo após a variável inserida
+                // Força o foco no editor e posicionar o cursor logo após a variável inserida
                 setTimeout(() => {
                     this.richEditor.commands.focus();
                     
@@ -1858,7 +1875,10 @@ export default {
             // Função auxiliar para limpar e formatar o texto da variável
             // Usamos a mesma lógica de normalizeVar na função extractVariables
             const formatarTextoVariavel = (texto) => {
-                return texto.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                // Remover acentos e caracteres especiais
+                const semAcentos = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+                // Converter para minúsculas e substituir caracteres não alfanuméricos por hífens
+                return semAcentos.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
             };
             
             // Substituir todas as ocorrências
