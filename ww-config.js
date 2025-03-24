@@ -199,6 +199,31 @@ export default {
                 },
             ],
         },
+        {
+            label: {
+                en: 'Replace Text',
+                pt: 'Substituir Texto'
+            },
+            action: 'replaceText',
+            args: [
+                {
+                    name: 'originalText',
+                    label: {
+                        en: 'Original Text',
+                        pt: 'Texto Original'
+                    },
+                    type: 'Text',
+                },
+                {
+                    name: 'replacementText',
+                    label: {
+                        en: 'Replacement Text',
+                        pt: 'Texto de Substituição'
+                    },
+                    type: 'Text',
+                },
+            ],
+        },
         { label: 'Toggle Bullet List', action: 'toggleBulletList' },
         { label: 'Toggle Ordered List', action: 'toggleOrderedList' },
         { label: 'Toggle Check List', action: 'toggleTaskList' },

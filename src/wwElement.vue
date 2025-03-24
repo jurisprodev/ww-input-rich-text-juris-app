@@ -593,12 +593,6 @@ export default {
                     inline: this.content.img?.inline,
                     allowBase64: true,
                 },
-                mention: {
-                    enabled: this.content.enableMention,
-                    list: this.mentionList,
-                    allowSpaces: this.content.mentionAllowSpaces,
-                    char: this.content.mentionChar,
-                },
             };
         },
         currentTextType: {
@@ -1315,17 +1309,10 @@ export default {
         },
         criarVariavel(params = {}) {
             try {
-                if (!this.richEditor) {
-                    console.error('Editor não disponível');
-                    return false;
-                }
+                const textoSelecionado = params.texto || (this.capturarSelecao(this.richEditor) || '').toString();
                 
-                // Usar o texto fornecido como parâmetro ou pegar do componente
-                let textoSelecionado = params.texto || this.textoSelecionado;
-                
-                // Verificar se há texto selecionado
-                if (!textoSelecionado) {
-                    console.error('Nenhum texto selecionado');
+                if (!textoSelecionado || textoSelecionado.length === 0) {
+                    console.warn('Nenhum texto selecionado para criar variável');
                     return false;
                 }
                 
@@ -1369,6 +1356,22 @@ export default {
                 console.error('Erro ao criar variável:', error);
                 return false;
             }
+        },
+        replaceText(originalText, replacementText) {
+            if (!this.richEditor || !originalText) return;
+            
+            // Obtém o conteúdo atual do editor
+            const conteudoAtual = this.richEditor.getHTML();
+            
+            // Realiza a substituição
+            const novoConteudo = conteudoAtual.replace(new RegExp(originalText, 'g'), replacementText);
+            
+            // Atualiza o conteúdo do editor
+            this.richEditor.commands.setContent(novoConteudo);
+            
+            // Emite evento de alteração
+            this.$emit('update:content', { text: this.extractVariables(novoConteudo) });
+            this.$emit('trigger-change', { value: this.richEditor.getHTML() });
         },
         handleGlobalPaste(event) {
             // Verificar se o editor está em foco
