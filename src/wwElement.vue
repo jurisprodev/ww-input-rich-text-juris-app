@@ -422,8 +422,15 @@ export default {
 
             if (this.isReadonly) this.handleOnUpdate();
         },
-        isEditable(value) {
-            this.richEditor.setEditable(value);
+        'content.editable': function(value) {
+            if (this.richEditor) {
+                this.richEditor.setEditable(value !== false);
+            }
+        },
+        'wwElementState.props.editable': function(value) {
+            if (this.richEditor) {
+                this.richEditor.setEditable(value !== false);
+            }
         },
         variableValue(value) {
             if (value !== this.getContent()) this.richEditor.commands.setContent(value);
@@ -553,7 +560,9 @@ export default {
                 : this.wwElementState.props.readonly;
         },
         isEditable() {
-            return true; // Forçando o editor a sempre ser editável
+            return this.wwElementState.props.editable === undefined
+                ? this.content.editable !== false
+                : this.wwElementState.props.editable !== false;
         },
         hideMenu() {
             return this.content.hideMenu || this.isReadonly;
@@ -777,7 +786,7 @@ export default {
 
             this.richEditor = new Editor({
                 content: String(this.content.initialValue || ''),
-                editable: true,
+                editable: this.isEditable,
                 autofocus: true, // Forçando autofocus para garantir que o editor receba foco
                 extensions: [
                     StarterKit.configure({
@@ -832,7 +841,12 @@ export default {
                     // Extrair variáveis do conteúdo atual
                     this.extractVariables(this.getContent());
                 },
-                onUpdate: this.handleOnUpdate,
+                onUpdate: () => {
+                    this.handleOnUpdate();
+                    
+                    // Verifica variáveis a cada atualização do conteúdo
+                    this.verificarVariaveisNoConteudo();
+                },
                 onSelectionUpdate: ({ editor }) => {
                     this.currentSelectionEmpty = editor.state.selection.empty;
                     
@@ -857,6 +871,14 @@ export default {
                 parseOptions: {
                     preserveWhitespace: false,
                 },
+                onPaste: () => {
+                    // Agendar a normalização de variáveis após a colagem
+                    setTimeout(() => {
+                        this.normalizarVariaveis();
+                    }, 100);
+                    // Continuar com o comportamento padrão
+                    return false;
+                },
             });
             
             this.loading = false;
@@ -872,7 +894,12 @@ export default {
                     event.stopPropagation();
                     
                     // Obter apenas texto plano
-                    const textoPlano = event.clipboardData.getData('text/plain');
+                    let textoPlano = event.clipboardData.getData('text/plain');
+                    
+                    // NOVA FUNCIONALIDADE: Substituir automaticamente underscores por hífens em variáveis
+                    textoPlano = textoPlano.replace(/\{\{([^{}]+)\}\}/g, (match, texto) => {
+                        return `{{${texto.replace(/_/g, '-')}}}`;
+                    });
                     
                     if (textoPlano) {
                         // Método 1: usar document.execCommand (compatível com mais navegadores)
@@ -885,6 +912,11 @@ export default {
                                 parseOptions: { preserveWhitespace: true }
                             });
                         }
+                        
+                        // Agendar verificação de variáveis logo após a colagem
+                        setTimeout(() => {
+                            this.verificarVariaveisNoConteudo();
+                        }, 50);
                     }
                     
                     return false;
@@ -899,6 +931,13 @@ export default {
         handleOnUpdate() {
             const htmlValue = this.richEditor.getHTML();
             if (!htmlValue) return;
+            
+            // Salvar a posição do cursor antes de qualquer modificação
+            const { state } = this.richEditor.view;
+            const selecao = { from: state.selection.from, to: state.selection.to };
+            
+            // Flag para verificar se o conteúdo foi modificado
+            let conteudoModificado = false;
             
             const currentDoc = this.richEditor.view.state.doc;
             
@@ -915,11 +954,15 @@ export default {
                             .setTextSelection({ from: pos, to: pos + node.nodeSize })
                             .unsetVar()
                             .run();
+                            
+                        conteudoModificado = true;
                     } else {
                         // Se estiver no formato correto, verificar se tem underscores
                         // e substitui-los por hífens
-                        if (varContent.includes('_')) {
-                            const textoSemChaves = varContent.substring(2, varContent.length - 2);
+                        const textoSemChaves = varContent.substring(2, varContent.length - 2);
+                        
+                        // Verificar se contém underscore
+                        if (textoSemChaves.includes('_')) {
                             const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
                             
                             if (textoSemChaves !== textoLimpo) {
@@ -929,6 +972,8 @@ export default {
                                     .deleteSelection()
                                     .insertContent(`<var>{{${textoLimpo}}}</var>`)
                                     .run();
+                                    
+                                conteudoModificado = true;
                             }
                         }
                     }
@@ -937,6 +982,7 @@ export default {
             });
             
             // Formatar qualquer {{texto}} que não tenha a tag <var>
+            // Busca por padrões no formato {{texto}} sem a tag <var>
             const htmlString = htmlValue.toString();
             const varPattern = /\{\{([^{}]+)\}\}/g;
             let match;
@@ -949,21 +995,33 @@ export default {
                 const isInsideVarTag = htmlString.indexOf(`<var>${fullMatch}</var>`) !== -1;
                 
                 if (!isInsideVarTag) {
-                    // Limpar e formatar o texto conforme as regras (substituir espaços e _ por -)
-                    const cleanText = textInside
-                        .replace(/[^\w\s]/g, '')
-                        .replace(/[\s_]+/g, '-');
+                    // Encontrar a posição no documento
+                    const currentText = this.richEditor.getText();
+                    const startPos = currentText.indexOf(fullMatch);
                     
-                    // Substituir a ocorrência no editor
-                    this.richEditor.commands.setContent(
-                        htmlValue.replace(
-                            fullMatch, 
-                            `<var>{{${cleanText}}}</var>`
-                        )
-                    );
+                    if (startPos !== -1) {
+                        const endPos = startPos + fullMatch.length;
+                        
+                        // Limpa o texto e adiciona as chaves
+                        const textoLimpo = textInside.replace(/[_]+/g, '-');
+                        
+                        // Substituir o texto diretamente
+                        this.richEditor.chain()
+                            .setTextSelection({ from: startPos, to: endPos })
+                            .insertContent(`<var>{{${textoLimpo}}}</var>`)
+                            .run();
+                        
+                        conteudoModificado = true;
+                    }
                 }
             }
             
+            // Restaurar a posição do cursor se houve modificações
+            if (conteudoModificado) {
+                this.richEditor.commands.setTextSelection(selecao);
+            }
+            
+            // Extrair variáveis sem modificar o conteúdo
             this.extractVariables(htmlValue);
             
             if (this.content.debounce) {
@@ -979,9 +1037,6 @@ export default {
                 this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
             }
             this.setMentions(this.richEditor.getJSON().content.reduce(extractMentions, []));
-            
-            // Forçar a normalização de variáveis após qualquer atualização
-            this.normalizarVariaveis();
         },
         setLink(url) {
             if (this.richEditor.isActive('link')) {
@@ -1069,51 +1124,38 @@ export default {
             this.richEditor.chain().focus().toggleBlockquote().run();
         },
         toggleVar() {
-            if (!this.richEditor) {
+            const { state } = this.richEditor.view;
+            const { from, to } = state.selection;
+            
+            if (from === to) return;
+            
+            // Obter o texto selecionado
+            const textoSelecionado = state.doc.textBetween(from, to, '');
+            
+            // Se não houver texto, não continuar
+            if (!textoSelecionado.trim()) {
+                this.limparSelecao();
                 return;
             }
 
-            // Obtém o texto selecionado atualmente
-            const { state } = this.richEditor;
-            const { from, to } = state.selection;
-            const selectedText = state.doc.textBetween(from, to, '');
+            // Formatar o texto para o padrão de variável
+            const textoFormatado = textoSelecionado
+                .trim()
+                .toLowerCase()
+                .replace(/[^\w\s-]/g, '') // Remove caracteres especiais, mantém letras, números, espaços e hífens
+                .replace(/[\s_]+/g, '-');  // Substitui espaços e underscores por hífens
             
-            // Verifica se há texto selecionado
-            if (selectedText.length > 0) {
-                // Limpa o texto: substitui espaços e underscores por hífens, remove outros símbolos
-                const cleanText = selectedText
-                    .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
-                    .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
-                
-                // Verifica se o texto já está no formato {{texto}}
-                if (selectedText.startsWith('{{') && selectedText.endsWith('}}')) {
-                    // Apenas aplica a tag var
-                    this.richEditor.chain().focus().toggleVar().run();
-                } else {
-                    // Se não estiver no formato correto, envolve o texto com {{}}
-                    const formattedText = '{{' + cleanText + '}}';
-                    
-                    // Substitui o texto selecionado pelo texto formatado
-                    this.richEditor.chain()
-                        .focus()
-                        .deleteSelection()
-                        .insertContent(formattedText)
-                        .setTextSelection({
-                            from: from,
-                            to: from + formattedText.length
-                        })
-                        .run();
-                    
-                    // Aplica a tag var ao novo texto
-                    this.richEditor.chain()
-                        .focus()
-                        .toggleVar()
-                        .run();
-                }
-            } else {
-                // Se não houver texto selecionado, apenas aplica a tag var
-                this.richEditor.chain().focus().toggleVar().run();
-            }
+            // Aplicar a tag var
+            this.richEditor.chain()
+                .setTextSelection({ from, to })
+                .deleteSelection()
+                .insertContent(`<var>{{${textoFormatado}}}</var>`)
+                .run();
+            
+            // Forçar verificação de variáveis
+            setTimeout(() => {
+                this.normalizarVariaveis();
+            }, 0);
         },
         toggleUnderline() {
             this.richEditor.chain().focus().toggleMark('underline').run();
@@ -1268,7 +1310,7 @@ export default {
 
             // Atualiza a propriedade inputsForm, se estiver definida
             if (this.content.inputsForm) {
-                this.$emit('update:content', {
+                this.$emit('update:content', { 
                     ...this.content,
                     inputsForm: resultado
                 });
@@ -1429,7 +1471,7 @@ export default {
         replaceText(originalText, replacementText) {
             if (!this.richEditor || !originalText) return;
             
-            // Obtém o conteúdo atual do editor
+            // Obter o conteúdo atual do editor
             const conteudoAtual = this.richEditor.getHTML();
             
             // Realiza a substituição
@@ -1590,60 +1632,103 @@ export default {
             }
         },
         normalizarVariaveis() {
-            if (!this.richEditor) return;
-            
-            // Verificar e modificar o conteúdo HTML diretamente
-            const conteudoAtual = this.richEditor.getHTML();
-            
-            // Regex para encontrar todas as variáveis no formato {{texto}} ou <var>{{texto}}</var>
-            const regexVariaveis = /<var>\{\{([^{}]+)\}\}<\/var>|\{\{([^{}]+)\}\}/g;
-            
-            let conteudoModificado = conteudoAtual;
-            let match;
-            let foiModificado = false;
-            
-            // Função auxiliar para limpar e formatar o texto da variável
+            // Função auxiliar para formatar texto de variáveis
             const formatarTextoVariavel = (texto) => {
                 return texto.replace(/[_]+/g, '-');
             };
             
+            // Salvar a posição do cursor antes de qualquer modificação
+            const { state } = this.richEditor.view;
+            const selecao = { from: state.selection.from, to: state.selection.to };
+            
+            // Regex para encontrar variáveis com e sem a tag <var>
+            const regexVariaveis = /<var>\{\{([^{}]+)\}\}<\/var>|\{\{([^{}]+)\}\}/g;
+            
+            const conteudoAtual = this.richEditor.getHTML();
+            let match;
+            
             // Substituir todas as ocorrências
             while ((match = regexVariaveis.exec(conteudoAtual)) !== null) {
-                const textoCompleto = match[0]; // <var>{{texto}}</var> ou {{texto}}
-                const textoVariavel = match[1] || match[2]; // texto dentro das chaves
+                const fullMatch = match[0]; // <var>{{texto}}</var> ou {{texto}}
+                const textInside = match[1] || match[2]; // texto dentro das chaves
                 
-                if (textoVariavel.includes('_')) {
-                    const textoFormatado = formatarTextoVariavel(textoVariavel);
+                // Se contém underscore, substituir por hífen
+                if (textInside.includes('_')) {
+                    const textoLimpo = formatarTextoVariavel(textInside);
                     
-                    // Determinar se a variável tem a tag <var>
-                    const temTagVar = textoCompleto.startsWith('<var>');
+                    // Encontrar a posição no documento
+                    const currentText = this.richEditor.getText();
+                    const startPos = currentText.indexOf(fullMatch);
                     
-                    // Criar a substituição apropriada
-                    const substituicao = temTagVar 
-                        ? `<var>{{${textoFormatado}}}</var>` 
-                        : `{{${textoFormatado}}}`;
-                    
-                    // Substituir no conteúdo
-                    conteudoModificado = conteudoModificado.replace(textoCompleto, substituicao);
-                    foiModificado = true;
+                    if (startPos !== -1) {
+                        const endPos = startPos + fullMatch.length;
+                        
+                        // Substituir o texto diretamente
+                        this.richEditor.chain()
+                            .setTextSelection({ from: startPos, to: endPos })
+                            .deleteSelection()
+                            .insertContent(`<var>{{${textoLimpo}}}</var>`)
+                            .run();
+                    }
                 }
             }
             
-            // Se houve modificações, atualizar o editor
-            if (foiModificado) {
-                // Salvar a posição do cursor antes da modificação
+            // Restaurar a posição do cursor se houve modificações
+            if (conteudoAtual !== this.richEditor.getHTML()) {
+                setTimeout(() => {
+                    this.richEditor.commands.setTextSelection(selecao);
+                }, 0);
+            }
+        },
+        verificarVariaveisNoConteudo() {
+            if (!this.richEditor) return;
+            
+            // Função auxiliar para formatar texto de variáveis
+            const formatarTextoVariavel = (texto) => {
+                return texto.replace(/[_]+/g, '-');
+            };
+            
+            // Obtém o HTML completo do editor
+            const conteudoAtual = this.richEditor.getHTML();
+            
+            // Regex para encontrar variáveis com a tag <var>
+            // Captura em grupo 1: o conteúdo dentro de {{}}
+            const regexVariaveis = /<var>\{\{([^{}]+)\}\}<\/var>/g;
+            
+            // Verifica se há texto com underscores
+            let match;
+            let encontrouUnderscore = false;
+            let novoConteudo = conteudoAtual;
+            
+            // Primeiro, verifica se há underscores em alguma variável
+            while ((match = regexVariaveis.exec(conteudoAtual)) !== null) {
+                const textoVariavel = match[1]; // Texto dentro das {{}}
+                
+                if (textoVariavel.includes('_')) {
+                    encontrouUnderscore = true;
+                    const textoCorrigido = formatarTextoVariavel(textoVariavel);
+                    
+                    // Substitui no novo conteúdo
+                    novoConteudo = novoConteudo.replace(
+                        `<var>{{${textoVariavel}}}</var>`,
+                        `<var>{{${textoCorrigido}}}</var>`
+                    );
+                }
+            }
+            
+            // Se encontrou underscores, atualiza o conteúdo no editor
+            if (encontrouUnderscore) {
+                // Salva a posição do cursor
                 const { state } = this.richEditor.view;
                 const selecao = { from: state.selection.from, to: state.selection.to };
                 
-                // Atualizar o conteúdo
-                this.richEditor.commands.setContent(conteudoModificado);
+                // Atualiza o conteúdo
+                this.richEditor.commands.setContent(novoConteudo);
                 
-                // Tentar restaurar a posição do cursor
-                this.richEditor.commands.setTextSelection(selecao);
-                
-                // Emitir eventos
-                this.$emit('update:content', { text: this.extractVariables(conteudoModificado) });
-                this.$emit('trigger-change', { value: conteudoModificado });
+                // Restaura a posição do cursor
+                setTimeout(() => {
+                    this.richEditor.commands.setTextSelection(selecao);
+                }, 0);
             }
         },
     },

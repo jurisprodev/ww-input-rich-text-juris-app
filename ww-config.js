@@ -123,6 +123,13 @@ export default {
     actions: [
         { label: 'Focus Rich text', action: 'focusEditor' },
         {
+            label: {
+                en: 'Create Variable from Selection',
+                pt: 'Criar Variável da Seleção'
+            },
+            action: 'toggleVar'
+        },
+        {
             label: 'Set Link',
             action: 'setLink',
             args: [
@@ -364,9 +371,11 @@ export default {
             section: 'settings',
             label: {
                 en: 'Init value',
+                pt: 'Valor inicial'
             },
             type: 'Textarea',
             defaultValue: '',
+            bindable: true,
         },
         output: {
             label: {
