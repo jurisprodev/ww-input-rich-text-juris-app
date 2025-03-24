@@ -897,11 +897,73 @@ export default {
             }, 100);
         },
         handleOnUpdate() {
-            let htmlValue = this.getContent();
-            if (this.variableValue === htmlValue) return;
-            this.setValue(htmlValue);
+            const htmlValue = this.richEditor.getHTML();
+            if (!htmlValue) return;
             
-            // Extrai variáveis do conteúdo atual
+            const currentDoc = this.richEditor.view.state.doc;
+            
+            // Verificar todos os nós que contêm a tag <var>
+            this.richEditor.view.state.doc.descendants((node, pos) => {
+                if (node.type.name === 'var') {
+                    // Obter o texto dentro da tag <var>
+                    const varContent = currentDoc.textBetween(pos, pos + node.nodeSize, '');
+                    
+                    // Verificar se o texto está no formato {{texto}}
+                    if (!(varContent.startsWith('{{') && varContent.endsWith('}}'))) {
+                        // Se não estiver no formato correto, remover a tag <var>
+                        this.richEditor.chain()
+                            .setTextSelection({ from: pos, to: pos + node.nodeSize })
+                            .unsetVar()
+                            .run();
+                    } else {
+                        // Se estiver no formato correto, verificar se tem underscores
+                        // e substitui-los por hífens
+                        if (varContent.includes('_')) {
+                            const textoSemChaves = varContent.substring(2, varContent.length - 2);
+                            const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
+                            
+                            if (textoSemChaves !== textoLimpo) {
+                                // Substitui o conteúdo com underscores por hífens
+                                this.richEditor.chain()
+                                    .setTextSelection({ from: pos, to: pos + node.nodeSize })
+                                    .deleteSelection()
+                                    .insertContent(`<var>{{${textoLimpo}}}</var>`)
+                                    .run();
+                            }
+                        }
+                    }
+                }
+                return true;
+            });
+            
+            // Formatar qualquer {{texto}} que não tenha a tag <var>
+            const htmlString = htmlValue.toString();
+            const varPattern = /\{\{([^{}]+)\}\}/g;
+            let match;
+            
+            while ((match = varPattern.exec(htmlString)) !== null) {
+                const fullMatch = match[0]; // {{texto}}
+                const textInside = match[1]; // texto
+                
+                // Verificar se esse texto já está dentro de uma tag <var>
+                const isInsideVarTag = htmlString.indexOf(`<var>${fullMatch}</var>`) !== -1;
+                
+                if (!isInsideVarTag) {
+                    // Limpar e formatar o texto conforme as regras (substituir espaços e _ por -)
+                    const cleanText = textInside
+                        .replace(/[^\w\s]/g, '')
+                        .replace(/[\s_]+/g, '-');
+                    
+                    // Substituir a ocorrência no editor
+                    this.richEditor.commands.setContent(
+                        htmlValue.replace(
+                            fullMatch, 
+                            `<var>{{${cleanText}}}</var>`
+                        )
+                    );
+                }
+            }
+            
             this.extractVariables(htmlValue);
             
             if (this.content.debounce) {
@@ -1004,10 +1066,7 @@ export default {
             this.richEditor.chain().focus().toggleBlockquote().run();
         },
         toggleVar() {
-            // Verifica se já está com a tag var ativa
-            if (this.richEditor.isActive('var')) {
-                // Se estiver ativa, remove a tag
-                this.richEditor.chain().focus().toggleVar().run();
+            if (!this.richEditor) {
                 return;
             }
 
@@ -1018,13 +1077,18 @@ export default {
             
             // Verifica se há texto selecionado
             if (selectedText.length > 0) {
+                // Limpa o texto: substitui espaços e underscores por hífens, remove outros símbolos
+                const cleanText = selectedText
+                    .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
+                    .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
+                
                 // Verifica se o texto já está no formato {{texto}}
                 if (selectedText.startsWith('{{') && selectedText.endsWith('}}')) {
                     // Apenas aplica a tag var
                     this.richEditor.chain().focus().toggleVar().run();
                 } else {
-                    // Se não tiver {{, envolve o texto com {{}}
-                    const formattedText = '{{' + selectedText.replace(/\s+/g, '-') + '}}';
+                    // Envolve o texto com {{}}
+                    const formattedText = '{{' + cleanText + '}}';
                     
                     // Substitui o texto selecionado pelo texto formatado
                     this.richEditor.chain()
@@ -1392,6 +1456,25 @@ export default {
                     // Criar elemento temporário para processar o HTML
                     const div = document.createElement('div');
                     div.innerHTML = html;
+                    
+                    // Verificar e corrigir todas as tags <var> sem {{}}
+                    const varTags = div.querySelectorAll('var');
+                    varTags.forEach(varTag => {
+                        const conteudo = varTag.textContent;
+                        // Se o conteúdo não estiver entre {{}}
+                        if (!(conteudo.startsWith('{{') && conteudo.endsWith('}}'))) {
+                            // Limpa o texto e adiciona as chaves
+                            const textoLimpo = conteudo
+                                .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
+                                .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
+                            varTag.textContent = `{{${textoLimpo}}}`;
+                        } else {
+                            // Se já está entre chaves, só garantir que underscores são substituídos
+                            const textoSemChaves = conteudo.substring(2, conteudo.length - 2);
+                            const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
+                            varTag.textContent = `{{${textoLimpo}}}`;
+                        }
+                    });
                     
                     // Função para remover atributos e estilos relacionados a fontes
                     const removerFormatacaoFonte = (elemento) => {
