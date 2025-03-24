@@ -1696,19 +1696,151 @@ export default {
                 return;
             }
             
-            // Se o editor TipTap já está processando a colagem internamente,
-            // vamos deixar que ele faça isso naturalmente sem interferência
-            // NÃO prevenir o comportamento padrão para permitir o funcionamento normal
+            // Permitimos que o TipTap processe a colagem normalmente
+            // Mas capturamos o evento para processar após a colagem ser concluída
             
-            // O problema de duplicação ocorria porque o TipTap já insere o conteúdo
-            // e nosso código também inseria, resultando em duplicação
+            // Interceptamos o evento apenas para poder limpar formatações específicas
+            // após a colagem ser processada pelo TipTap
+            const html = event.clipboardData?.getData('text/html');
             
-            // Em vez disso, vamos apenas processar o conteúdo colado após a inserção
-            // pelo TipTap através do evento de atualização do editor
+            if (html) {
+                // Evitamos a duplicação não inserindo conteúdo manualmente
+                // Apenas aguardamos o processamento interno e depois limpamos formatações
+                
+                // Usamos setTimeout para garantir que o conteúdo já foi inserido
+                // pelo TipTap antes de tentarmos limpar as formatações
+                setTimeout(() => {
+                    this.limparFormatacoesDaColagem();
+                }, 0);
+            }
+        },
+        
+        // Nova função para limpar formatações após colagem
+        limparFormatacoesDaColagem() {
+            if (!this.richEditor) return;
             
-            // A função normalizarVariaveis já está sendo chamada após atualizações
-            // Isso vai garantir que as tags <var> e outras formatações sejam tratadas
-            // sem causar duplicação de conteúdo
+            // Salvamos a seleção atual para restaurar depois
+            const { state } = this.richEditor;
+            const { selection } = state;
+            
+            try {
+                // Obtém o HTML atual
+                const htmlAtual = this.richEditor.getHTML();
+                
+                // Cria um elemento temporário para manipular o HTML
+                const div = document.createElement('div');
+                div.innerHTML = htmlAtual;
+                
+                // Função para remover atributos e estilos relacionados a fontes
+                const removerFormatacaoFonte = (elemento) => {
+                    if (!elemento) return;
+                    
+                    // Remover atributos de estilo de fonte
+                    if (elemento.style) {
+                        elemento.style.fontFamily = '';
+                        elemento.style.fontSize = '';
+                        elemento.style.font = '';
+                    }
+                    
+                    // Remover atributos relacionados a fonte
+                    const atributosParaRemover = [
+                        'face', 'size', 'font', 'data-font', 'data-size'
+                    ];
+                    
+                    atributosParaRemover.forEach(attr => {
+                        if (elemento.hasAttribute(attr)) {
+                            elemento.removeAttribute(attr);
+                        }
+                    });
+                    
+                    // Remover classes que possam conter formatação de fonte
+                    if (elemento.classList) {
+                        const classesParaRemover = [];
+                        elemento.classList.forEach(className => {
+                            if (className.includes('font') || className.includes('text-size')) {
+                                classesParaRemover.push(className);
+                            }
+                        });
+                        
+                        classesParaRemover.forEach(className => {
+                            elemento.classList.remove(className);
+                        });
+                    }
+                    
+                    // Processar filhos recursivamente
+                    Array.from(elemento.children || []).forEach(removerFormatacaoFonte);
+                };
+                
+                // Processar todos os elementos para remover formatações
+                removerFormatacaoFonte(div);
+                
+                // Converter tags específicas com estilos de fonte
+                const seletoresTagsParaProcessar = 'font, span[style*="font"], *[style*="font-family"], *[style*="font-size"]';
+                const tagsParaProcessar = div.querySelectorAll(seletoresTagsParaProcessar);
+                
+                tagsParaProcessar.forEach(tag => {
+                    if (tag.style) {
+                        tag.style.fontFamily = '';
+                        tag.style.fontSize = '';
+                        tag.style.font = '';
+                    }
+                    
+                    // Para tags <font>, repassamos o conteúdo para um span neutro
+                    if (tag.tagName.toLowerCase() === 'font') {
+                        const span = document.createElement('span');
+                        span.innerHTML = tag.innerHTML;
+                        
+                        if (tag.parentNode) {
+                            tag.parentNode.replaceChild(span, tag);
+                        }
+                    }
+                });
+                
+                // Simplificar a estrutura para remover elementos vazios ou redundantes
+                const simplificarElementos = (elemento) => {
+                    if (!elemento || !elemento.children || elemento.children.length === 0) return;
+                    
+                    Array.from(elemento.children).forEach(filho => {
+                        // Recursivamente simplifica os filhos primeiro
+                        simplificarElementos(filho);
+                        
+                        // Remove spans vazios ou sem atributos aninhados
+                        if (filho.tagName.toLowerCase() === 'span' && 
+                            (!filho.attributes.length || filho.attributes.length === 0) && 
+                            ['span', 'p', 'div'].includes(elemento.tagName.toLowerCase())) {
+                            
+                            // Mover o conteúdo do filho para o pai
+                            while (filho.firstChild) {
+                                elemento.insertBefore(filho.firstChild, filho);
+                            }
+                            
+                            // Remover o filho vazio
+                            elemento.removeChild(filho);
+                        }
+                    });
+                };
+                
+                // Simplificar a estrutura HTML
+                simplificarElementos(div);
+                
+                // Obter o HTML limpo e configurar no editor
+                const htmlLimpo = div.innerHTML;
+                
+                // Verificar se houve alteração no HTML para evitar loops
+                if (htmlLimpo !== htmlAtual) {
+                    // Atualizar o conteúdo do editor com o HTML limpo
+                    this.richEditor.commands.setContent(htmlLimpo);
+                    
+                    // Tentar restaurar a seleção se possível
+                    try {
+                        this.richEditor.commands.setTextSelection(selection);
+                    } catch (e) {
+                        console.warn('Não foi possível restaurar a seleção após limpeza:', e);
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao limpar formatações após colagem:', error);
+            }
         },
         normalizarVariaveis() {
             if (!this.richEditor) return;
