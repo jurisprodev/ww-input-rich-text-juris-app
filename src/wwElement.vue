@@ -871,57 +871,9 @@ export default {
                 parseOptions: {
                     preserveWhitespace: false,
                 },
-                onPaste: () => {
-                    // Agendar a normalização de variáveis após a colagem
-                    setTimeout(() => {
-                        this.normalizarVariaveis();
-                    }, 100);
-                    // Continuar com o comportamento padrão
-                    return false;
-                },
             });
             
             this.loading = false;
-            
-            // Adicionar manipulador global de colagem apenas para texto plano
-            if (this.$el && this.$el.querySelector('.ProseMirror')) {
-                const editor = this.$el.querySelector('.ProseMirror');
-                
-                // Adicionar evento de colagem diretamente ao elemento do editor
-                editor.addEventListener('paste', (event) => {
-                    // Prevenir comportamento padrão
-                    event.preventDefault();
-                    event.stopPropagation();
-                    
-                    // Obter apenas texto plano
-                    let textoPlano = event.clipboardData.getData('text/plain');
-                    
-                    // NOVA FUNCIONALIDADE: Substituir automaticamente underscores por hífens em variáveis
-                    textoPlano = textoPlano.replace(/\{\{([^{}]+)\}\}/g, (match, texto) => {
-                        return `{{${texto.replace(/_/g, '-')}}}`;
-                    });
-                    
-                    if (textoPlano) {
-                        // Método 1: usar document.execCommand (compatível com mais navegadores)
-                        if (document.queryCommandSupported('insertText')) {
-                            document.execCommand('insertText', false, textoPlano);
-                        } 
-                        // Método 2: fallback para TipTap API
-                        else if (this.richEditor) {
-                            this.richEditor.commands.insertContent(textoPlano, {
-                                parseOptions: { preserveWhitespace: true }
-                            });
-                        }
-                        
-                        // Agendar verificação de variáveis logo após a colagem
-                        setTimeout(() => {
-                            this.verificarVariaveisNoConteudo();
-                        }, 50);
-                    }
-                    
-                    return false;
-                }, true);
-            }
             
             // Força o foco no editor após carregar
             setTimeout(() => {
