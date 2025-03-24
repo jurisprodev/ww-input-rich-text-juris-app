@@ -1191,6 +1191,9 @@ export default {
             
             this.extractVariables(htmlValue);
             
+            // Atualizar explicitamente o valor do componente com o HTML atual
+            this.setValue(htmlValue);
+            
             if (this.content.debounce) {
                 this.isDebouncing = true;
                 if (this.debounce) {
@@ -1310,7 +1313,7 @@ export default {
                     // Remover acentos e caracteres especiais
                     const semAcentos = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
                     // Converter para minúsculas e substituir caracteres não alfanuméricos por hífens
-                    return semAcentos.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+                    return semAcentos.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
                 };
                 
                 // Verifica se o texto já está no formato {{texto}}
