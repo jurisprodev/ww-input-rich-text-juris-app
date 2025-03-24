@@ -349,9 +349,11 @@ export default {
             section: 'settings',
             label: {
                 en: 'Read only',
+                pt: 'Somente leitura'
             },
             type: 'OnOff',
             defaultValue: false,
+            bindable: true,
         },
         customMenu: {
             label: {
@@ -364,9 +366,11 @@ export default {
             section: 'settings',
             label: {
                 en: 'Init value',
+                pt: 'Valor inicial'
             },
-            type: 'Textarea',
-            defaultValue: '',
+            type: 'Text',
+            defaultValue: '<p></p>',
+            bindable: true,
         },
         output: {
             label: {
@@ -405,24 +409,29 @@ export default {
             section: 'settings',
             label: {
                 en: 'Placeholder',
+                pt: 'Placeholder'
             },
-            type: 'Textarea',
-            defaultValue: 'Type here...',
+            type: 'Text',
+            defaultValue: '',
+            bindable: true,
         },
         enableMention: {
             section: 'settings',
             label: {
                 en: 'Mentions',
+                pt: 'Menções'
             },
             type: 'OnOff',
             defaultValue: false,
+            bindable: true,
         },
         mentionList: {
             section: 'settings',
+            hidden: content => !content.enableMention,
             label: {
                 en: 'Mentions List',
+                pt: 'Lista de Menções'
             },
-            hidden: content => !content.enableMention,
             type: 'Array',
             options: {
                 item: {
@@ -431,11 +440,11 @@ export default {
                     options: {
                         item: {
                             id: {
-                                label: { en: 'Id' },
+                                label: { en: 'Id', pt: 'Id' },
                                 type: 'Text',
                             },
                             label: {
-                                label: { en: 'Label' },
+                                label: { en: 'Label', pt: 'Texto' },
                                 type: 'Text',
                             },
                         },
@@ -443,6 +452,45 @@ export default {
                 },
             },
             defaultValue: [],
+            bindable: true,
+        },
+        mentionChar: {
+            section: 'settings',
+            hidden: content => !content.enableMention,
+            label: {
+                en: 'Char trigger',
+                pt: 'Caractere de ativação'
+            },
+            type: 'Text',
+            defaultValue: '@',
+            bindable: true,
+        },
+        mentionAllowSpaces: {
+            section: 'settings',
+            hidden: content => !content.enableMention,
+            label: {
+                en: 'Allow spaces',
+                pt: 'Permitir espaços'
+            },
+            type: 'OnOff',
+            defaultValue: false,
+            bindable: true,
+        },
+        mentionListLength: {
+            section: 'settings',
+            hidden: content => !content.enableMention,
+            label: {
+                en: 'Numbers of suggestion',
+                pt: 'Número de sugestões'
+            },
+            type: 'Number',
+            options: {
+                min: 1,
+                max: 20,
+                step: 1,
+            },
+            defaultValue: 5,
+            bindable: true,
         },
         mentionIdPath: {
             hidden: (content, sidepanelContent, boundProps) =>
@@ -466,38 +514,6 @@ export default {
             defaultValue: null,
             section: 'settings',
         },
-        mentionAllowSpaces: {
-            section: 'settings',
-            hidden: content => !content.enableMention,
-            label: {
-                en: 'Allow spaces',
-            },
-            type: 'OnOff',
-            defaultValue: false,
-        },
-        mentionChar: {
-            section: 'settings',
-            hidden: content => !content.enableMention,
-            label: {
-                en: 'Char trigger',
-            },
-            type: 'Text',
-            defaultValue: '@',
-        },
-        mentionListLength: {
-            section: 'settings',
-            hidden: content => !content.enableMention,
-            label: {
-                en: 'Numbers of suggestion',
-            },
-            type: 'Number',
-            options: {
-                min: 1,
-                max: 20,
-                step: 1,
-            },
-            defaultValue: 5,
-        },
         autofocus: {
             section: 'settings',
             label: {
@@ -510,6 +526,7 @@ export default {
             section: 'settings',
             label: {
                 en: 'Editable',
+                pt: 'Editável'
             },
             type: 'OnOff',
             defaultValue: true,

@@ -266,7 +266,6 @@ import CodeBlock from '@tiptap/extension-code-block';
 import Mention from '@tiptap/extension-mention';
 import { Var } from './VarExtension.js';
 import { VarAutoDetect } from './VarAutoDetectExtension.js';
-import suggestion from './suggestion.js';
 import { computed, inject } from 'vue';
 
 function extractMentions(acc, currentNode) {
@@ -536,12 +535,91 @@ export default {
             else return this.content[Object.keys(TAGS_MAP).find(key => TAGS_MAP[key] === this.currentTextType)]?.color;
         },
         mentionList() {
-            const data = wwLib.wwCollection.getCollectionData(this.content.mentionList);
-            if (!Array.isArray(data)) return [];
-            return data.map(mention => ({
-                id: wwLib.resolveObjectPropertyPath(mention, this.content.mentionIdPath || 'id') || '',
-                label: wwLib.resolveObjectPropertyPath(mention, this.content.mentionLabelPath || 'label') || '',
-            }));
+            // Obtem a lista de menções das propriedades
+            let result = [];
+            
+            // Verifica se a menção está ativada
+            if (!this.content.enableMention) return [];
+            
+            console.log('Processando mentionList, content:', this.content);
+            
+            // Primeiro verificar se tem itens configurados diretamente
+            if (Array.isArray(this.content.suggestions)) {
+                result = this.content.suggestions.map(item => ({
+                    id: item.id,
+                    label: item.label
+                })).filter(item => item.id !== undefined && item.label !== undefined);
+                
+                console.log('Itens encontrados em content.suggestions:', result);
+                
+                if (result.length > 0) {
+                    return result;
+                }
+            }
+            
+            // Verificar itens individuais configurados
+            const configItems = [];
+            for (let i = 1; i <= 20; i++) {
+                const itemKey = `item${i}`;
+                if (this.content[itemKey] && 
+                    this.content[itemKey].id !== undefined && 
+                    this.content[itemKey].label !== undefined) {
+                    configItems.push({
+                        id: this.content[itemKey].id,
+                        label: this.content[itemKey].label
+                    });
+                }
+            }
+            
+            if (configItems.length > 0) {
+                console.log('Itens encontrados configurados diretamente:', configItems);
+                return configItems;
+            }
+            
+            // Verifica se é uma variável ou array direto
+            if (typeof this.content.mentionList === 'string') {
+                // É uma variável bindable
+                result = wwLib.wwVariable.getValue(this.content.mentionList) || [];
+                console.log('MentionList de variável bindable:', result);
+            } else if (Array.isArray(this.content.mentionList)) {
+                // É um array direto
+                result = this.content.mentionList;
+                console.log('MentionList de array direto:', result);
+            }
+            
+            // Se ainda não conseguiu uma lista, tenta recuperar diretamente com wwCollection
+            if (!result || !result.length) {
+                try {
+                    const data = wwLib.wwCollection.getCollectionData(this.content.mentionList);
+                    if (Array.isArray(data) && data.length) {
+                        result = data;
+                        console.log('MentionList de wwCollection.getCollectionData:', result);
+                    }
+                } catch (e) {
+                    console.error('Erro ao usar wwCollection.getCollectionData:', e);
+                }
+            }
+            
+            // Processa conforme os path ou não
+            if (result && result.length && this.content.mentionIdPath && this.content.mentionLabelPath) {
+                // Se tiver caminhos definidos, mapeia
+                console.log('Mapeando usando paths -', 'idPath:', this.content.mentionIdPath, 'labelPath:', this.content.mentionLabelPath);
+                return result.map(item => {
+                    if (!item) return null;
+                    try {
+                        const id = wwLib.wwCollection.getDataFromPath(item, this.content.mentionIdPath);
+                        const label = wwLib.wwCollection.getDataFromPath(item, this.content.mentionLabelPath);
+                        return { id, label };
+                    } catch (e) {
+                        console.error('Erro ao mapear item com path:', e, item);
+                        return null;
+                    }
+                }).filter(Boolean);
+            } else {
+                // Se não tiver caminhos, usa direto os campos id e label
+                console.log('Usando os campos id e label diretamente');
+                return result;
+            }
         },
         mentionListLength() {
             if (!this.content.mentionListLength || isNaN(this.content.mentionListLength)) return 5;
@@ -553,7 +631,7 @@ export default {
                 : this.wwElementState.props.readonly;
         },
         isEditable() {
-            return true; // Forçando o editor a sempre ser editável
+            return !this.isReadonly && this.content.editable;
         },
         hideMenu() {
             return this.content.hideMenu || this.isReadonly;
@@ -592,6 +670,162 @@ export default {
                 image: {
                     inline: this.content.img?.inline,
                     allowBase64: true,
+                },
+                mention: {
+                    enabled: this.content.enableMention,
+                    list: this.mentionList,
+                    allowSpaces: this.content.mentionAllowSpaces,
+                    char: this.content.mentionChar,
+                    renderLabel: ({ node }) => {
+                        // Quando o usuário clica em uma menção existente
+                        this.$emit('trigger-event', {
+                            name: 'mention:click',
+                            event: {
+                                mention: {
+                                    id: node.attrs.id,
+                                    label: node.attrs.label,
+                                },
+                            },
+                        });
+                        return `${this.content.mentionChar || '@'}${node.attrs.label}`;
+                    },
+                    suggestion: {
+                        items: ({ query }) => {
+                            console.log('Query menções:', query);
+                            console.log('Lista de menções calculada:', this.mentionList);
+                            
+                            // Usa a propriedade computada para obter a lista de menções
+                            let items = this.mentionList || [];
+                            
+                            // Se não há itens, retorna vazio
+                            if (!items.length) {
+                                console.log('Lista de menções vazia');
+                                return [];
+                            }
+                            
+                            // Filtra a lista baseado na consulta
+                            if (query) {
+                                const searchString = query.toLowerCase();
+                                items = items.filter(item => {
+                                    if (!item || !item.label) return false;
+                                    
+                                    try {
+                                        return item.label.toString().toLowerCase().includes(searchString);
+                                    } catch (e) {
+                                        console.error('Erro ao filtrar item de menção:', e);
+                                        return false;
+                                    }
+                                });
+                                
+                                console.log('Items após filtrar por query:', items);
+                            }
+                            
+                            // Limita a quantidade de itens pelo valor definido nas propriedades
+                            const limit = parseInt(this.content.mentionListLength) || 5;
+                            const result = items.slice(0, limit);
+                            
+                            console.log('Resultado final:', result);
+                            return result;
+                        },
+                        render: () => {
+                            let popup = null;
+                            let selectedIndex = 0;
+                            
+                            const renderPopup = (items, command) => {
+                                if (!popup) return;
+                                
+                                // Limpa o conteúdo do popup
+                                popup.innerHTML = '';
+                                
+                                if (!items || !items.length) {
+                                    const noResultsItem = document.createElement('div');
+                                    noResultsItem.className = 'item';
+                                    noResultsItem.textContent = 'Nenhum resultado';
+                                    popup.appendChild(noResultsItem);
+                                    return;
+                                }
+                                
+                                // Renderiza cada item da lista
+                                items.forEach((item, index) => {
+                                    const button = document.createElement('button');
+                                    button.className = 'item';
+                                    if (index === selectedIndex) {
+                                        button.className += ' is-selected';
+                                    }
+                                    button.textContent = item.label;
+                                    
+                                    button.addEventListener('click', () => {
+                                        command(item);
+                                    });
+                                    
+                                    popup.appendChild(button);
+                                });
+                            };
+                            
+                            return {
+                                onStart: props => {
+                                    // Reset do índice selecionado
+                                    selectedIndex = 0;
+                                    
+                                    // Cria o elemento para o popup
+                                    popup = document.createElement('div');
+                                    popup.className = 'mention-suggestion items';
+                                    document.body.appendChild(popup);
+                                    
+                                    // Renderiza o popup com os itens iniciais
+                                    renderPopup(props.items, props.command);
+                                    
+                                    // Posicionar o popup
+                                    const coords = this.richEditor.view.coordsAtPos(props.range.from);
+                                    popup.style.position = 'absolute';
+                                    popup.style.left = `${coords.left}px`;
+                                    popup.style.top = `${coords.bottom}px`;
+                                    popup.style.zIndex = '9999';
+                                },
+                                onUpdate: props => {
+                                    renderPopup(props.items, props.command);
+                                },
+                                onKeyDown: props => {
+                                    if (!popup || !props || !props.items || !props.items.length) {
+                                        return false;
+                                    }
+                                    
+                                    // Lidar com as teclas de navegação
+                                    if (props.event.key === 'ArrowUp') {
+                                        selectedIndex = ((selectedIndex + props.items.length) - 1) % props.items.length;
+                                        renderPopup(props.items, props.command);
+                                        return true;
+                                    }
+                                    
+                                    if (props.event.key === 'ArrowDown') {
+                                        selectedIndex = (selectedIndex + 1) % props.items.length;
+                                        renderPopup(props.items, props.command);
+                                        return true;
+                                    }
+                                    
+                                    if (props.event.key === 'Enter') {
+                                        const item = props.items[selectedIndex];
+                                        if (item) {
+                                            props.command(item);
+                                        }
+                                        return true;
+                                    }
+                                    
+                                    if (props.event.key === 'Escape') {
+                                        return true;
+                                    }
+                                    
+                                    return false;
+                                },
+                                onExit: () => {
+                                    if (popup) {
+                                        document.body.removeChild(popup);
+                                        popup = null;
+                                    }
+                                },
+                            };
+                        },
+                    },
                 },
             };
         },
@@ -770,6 +1004,11 @@ export default {
             if (this.richEditor) {
                 this.richEditor.setOptions({
                     editable: this.isEditable || this.wwEditorState?.isEditing,
+                    editorProps: {
+                        attributes: {
+                            placeholder: wwLib.wwLang.getText(this.content.placeholder)
+                        }
+                    }
                 });
                 this.loading = false;
                 return;
@@ -777,8 +1016,21 @@ export default {
 
             this.richEditor = new Editor({
                 content: String(this.content.initialValue || ''),
-                editable: true,
-                autofocus: true, // Forçando autofocus para garantir que o editor receba foco
+                editable: this.isEditable || this.wwEditorState?.isEditing,
+                autofocus: this.content.autofocus || false,
+                editorProps: {
+                    attributes: {
+                        placeholder: wwLib.wwLang.getText(this.content.placeholder || '')
+                    },
+                    handleClickOn: (view, pos, node) => {
+                        if (node.type.name === 'mention') {
+                            this.$emit('trigger-event', {
+                                name: 'mention:click',
+                                event: { mention: { id: node.attrs.id, label: node.attrs.label } },
+                            });
+                        }
+                    },
+                },
                 extensions: [
                     StarterKit.configure({
                         history: true,
@@ -812,25 +1064,14 @@ export default {
                     TextAlign.configure({
                         types: ['heading', 'paragraph'],
                     }),
-                    Mention.configure({
-                        HTMLAttributes: {
-                            class: 'mention',
-                        },
-                        suggestion,
-                    }),
+                    CodeBlock,
+                    Mention.configure(this.editorConfig.mention),
                     Var,
                     VarAutoDetect,
-                    CodeBlock,
                 ],
                 onCreate: () => {
                     this.setValue(this.getContent());
-                    // Forçar editor a ser editável após criação
-                    this.richEditor.setEditable(true);
-                    
-                    // Processar menções e variáveis
-                    this.setMentions(this.richEditor.getJSON().content?.reduce(extractMentions, []) || []);
-                    // Extrair variáveis do conteúdo atual
-                    this.extractVariables(this.getContent());
+                    this.setMentions(this.richEditor.getJSON().content.reduce(extractMentions, []));
                 },
                 onUpdate: this.handleOnUpdate,
                 onSelectionUpdate: ({ editor }) => {
@@ -897,8 +1138,10 @@ export default {
             }, 100);
         },
         handleOnUpdate() {
-            const htmlValue = this.richEditor.getHTML();
-            if (!htmlValue) return;
+            const htmlValue = this.getContent();
+            
+            if (this.variableValue === htmlValue) return;
+            this.setValue(htmlValue);
             
             const currentDoc = this.richEditor.view.state.doc;
             
@@ -949,7 +1192,7 @@ export default {
                 const isInsideVarTag = htmlString.indexOf(`<var>${fullMatch}</var>`) !== -1;
                 
                 if (!isInsideVarTag) {
-                    // Limpar e formatar o texto conforme as regras (substituir espaços e _ por -)
+                    // Limpa o texto e adiciona as chaves
                     const cleanText = textInside
                         .replace(/[^\w\s]/g, '')
                         .replace(/[\s_]+/g, '-');
@@ -961,24 +1204,38 @@ export default {
                             `<var>{{${cleanText}}}</var>`
                         )
                     );
+                } else {
+                    // Se já está entre chaves, só garantir que underscores são substituídos
+                    const textoSemChaves = textInside.substring(2, textInside.length - 2);
+                    const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
+                    this.richEditor.commands.setContent(
+                        htmlValue.replace(
+                            fullMatch, 
+                            `<var>{{${textoLimpo}}}</var>`
+                        )
+                    );
                 }
             }
             
+            // Extrair variáveis
             this.extractVariables(htmlValue);
             
+            // Configurar eventos de trigger com debounce se necessário
             if (this.content.debounce) {
                 this.isDebouncing = true;
-                if (this.debounce) {
-                    clearTimeout(this.debounce);
+                if (this.debounceTimeoutId) {
+                    clearTimeout(this.debounceTimeoutId);
                 }
-                this.debounce = setTimeout(() => {
+                this.debounceTimeoutId = setTimeout(() => {
                     this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
                     this.isDebouncing = false;
                 }, this.delay);
             } else {
                 this.$emit('trigger-event', { name: 'change', event: { value: this.variableValue } });
             }
-            this.setMentions(this.richEditor.getJSON().content.reduce(extractMentions, []));
+            
+            // Processar menções
+            this.setMentions(this.richEditor.getJSON().content?.reduce(extractMentions, []) || []);
             
             // Forçar a normalização de variáveis após qualquer atualização
             this.normalizarVariaveis();
@@ -1470,8 +1727,10 @@ export default {
                         if (!(conteudo.startsWith('{{') && conteudo.endsWith('}}'))) {
                             // Limpa o texto e adiciona as chaves
                             const textoLimpo = conteudo
-                                .replace(/[^\w\s]/g, '') // Remove símbolos que não são letras, números ou espaços
-                                .replace(/[\s_]+/g, '-'); // Substitui espaços e underscores por hífens
+                                .replace(/[^\w\s]/g, '')
+                                .replace(/[\s_]+/g, '-');
+                            
+                            // Substituir o conteúdo da tag <var>
                             varTag.textContent = `{{${textoLimpo}}}`;
                         } else {
                             // Se já está entre chaves, só garantir que underscores são substituídos
@@ -2061,6 +2320,33 @@ export default {
 
     &.-readonly .ProseMirror {
         cursor: inherit;
+    }
+
+    .mention-suggestion {
+        background: white;
+        border-radius: 4px;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+        overflow: hidden;
+        min-width: 180px;
+        max-width: 300px;
+        
+        .items {
+            padding: 0;
+            
+            .item {
+                display: block;
+                width: 100%;
+                padding: 8px 12px;
+                text-align: left;
+                border: none;
+                background: none;
+                cursor: pointer;
+                
+                &:hover, &.is-selected {
+                    background-color: #f5f5f5;
+                }
+            }
+        }
     }
 }
 </style>
