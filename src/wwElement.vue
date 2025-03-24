@@ -1071,7 +1071,7 @@ export default {
                     this.handleOnUpdate();
                     
                     // Verifica variáveis a cada atualização do conteúdo
-                    this.verificarVariaveisNoConteudo();
+                    this.normalizarVariaveis();
                 },
                 onSelectionUpdate: ({ editor }) => {
                     this.currentSelectionEmpty = editor.state.selection.empty;
@@ -1691,153 +1691,24 @@ export default {
             this.$emit('trigger-change', { value: this.richEditor.getHTML() });
         },
         handleGlobalPaste(event) {
-            // Verificar se o editor está em foco
+            // Verificar se o editor está em foco e se deve processar o evento
             if (!this.richEditor || !this.$el.contains(event.target)) {
                 return;
             }
             
-            // Prevenir comportamento padrão
-            event.preventDefault();
-            event.stopPropagation();
+            // Se o editor TipTap já está processando a colagem internamente,
+            // vamos deixar que ele faça isso naturalmente sem interferência
+            // NÃO prevenir o comportamento padrão para permitir o funcionamento normal
             
-            try {
-                // Obter o HTML da área de transferência
-                const html = event.clipboardData.getData('text/html');
-                const textoPlano = event.clipboardData.getData('text/plain');
-                
-                if (html) {
-                    // Criar elemento temporário para processar o HTML
-                    const div = document.createElement('div');
-                    div.innerHTML = html;
-                    
-                    // Verificar e corrigir todas as tags <var> sem {{}}
-                    const varTags = div.querySelectorAll('var');
-                    varTags.forEach(varTag => {
-                        const conteudo = varTag.textContent;
-                        // Se o conteúdo não estiver entre {{}}
-                        if (!(conteudo.startsWith('{{') && conteudo.endsWith('}}'))) {
-                            // Limpa o texto e adiciona as chaves
-                            const textoLimpo = conteudo
-                                .replace(/[^\w\s]/g, '')
-                                .replace(/[\s_]+/g, '-');
-                            
-                            // Substituir o conteúdo da tag <var>
-                            varTag.textContent = `{{${textoLimpo}}}`;
-                        } else {
-                            // Se já está entre chaves, só garantir que underscores são substituídos
-                            const textoSemChaves = conteudo.substring(2, conteudo.length - 2);
-                            const textoLimpo = textoSemChaves.replace(/[_]+/g, '-');
-                            varTag.textContent = `{{${textoLimpo}}}`;
-                        }
-                    });
-                    
-                    // Função para remover atributos e estilos relacionados a fontes
-                    const removerFormatacaoFonte = (elemento) => {
-                        if (!elemento) return;
-                        
-                        // Remover atributos de estilo de fonte completamente
-                        if (elemento.style) {
-                            elemento.style.fontFamily = '';
-                            elemento.style.fontSize = '';
-                            elemento.style.font = '';
-                            elemento.style.color = '';
-                            elemento.style.backgroundColor = '';
-                            elemento.style.lineHeight = '';
-                            elemento.style.letterSpacing = '';
-                            elemento.style.wordSpacing = '';
-                            elemento.style.textIndent = '';
-                        }
-                        
-                        // Remover vários atributos relacionados a formatação
-                        const atributosParaRemover = [
-                            'face', 'size', 'color', 'bgcolor', 'style',
-                            'class', 'align', 'valign', 'data-mce-style',
-                            'data-font', 'data-size', 'data-color'
-                        ];
-                        
-                        atributosParaRemover.forEach(attr => {
-                            elemento.removeAttribute(attr);
-                        });
-                        
-                        // Processar filhos recursivamente
-                        Array.from(elemento.children || []).forEach(removerFormatacaoFonte);
-                    };
-                    
-                    // Processar todos os elementos
-                    removerFormatacaoFonte(div);
-                    
-                    // Converter tags específicas em elementos neutros
-                    const seletoresTagsParaConverter = 'font, span[style], b[style], i[style], u[style], s[style], strong[style], em[style]';
-                    const tagsParaConverter = div.querySelectorAll(seletoresTagsParaConverter);
-                    
-                    tagsParaConverter.forEach(tag => {
-                        // Se a tag não tem conteúdo de texto, mais eficiente apenas removê-la
-                        if (!tag.textContent.trim()) {
-                            if (tag.parentNode) {
-                                tag.parentNode.removeChild(tag);
-                            }
-                            return;
-                        }
-                        
-                        // Para tags com conteúdo, substituir por span limpo
-                        const span = document.createElement('span');
-                        span.innerHTML = tag.innerHTML;
-                        
-                        if (tag.parentNode) {
-                            tag.parentNode.replaceChild(span, tag);
-                        }
-                    });
-                    
-                    // Simplificar elementos aninhados desnecessariamente
-                    const simplificarElementos = (elemento) => {
-                        if (!elemento || !elemento.children || elemento.children.length === 0) return;
-                        
-                        Array.from(elemento.children).forEach(filho => {
-                            // Primeiro simplifica recursivamente os filhos
-                            simplificarElementos(filho);
-                            
-                            // Se o filho é um span sem atributos e seu pai também é um elemento de formatação
-                            if (filho.tagName.toLowerCase() === 'span' && 
-                                !filho.attributes.length && 
-                                ['span', 'p', 'div'].includes(elemento.tagName.toLowerCase())) {
-                                // Mover o conteúdo do filho para o pai
-                                while (filho.firstChild) {
-                                    elemento.insertBefore(filho.firstChild, filho);
-                                }
-                                // Remover o filho vazio
-                                elemento.removeChild(filho);
-                            }
-                        });
-                    };
-                    
-                    // Simplificar a estrutura do HTML
-                    simplificarElementos(div);
-                    
-                    // Obter o HTML limpo
-                    const htmlLimpo = div.innerHTML;
-                    console.log('Colando HTML com todas as formatações removidas');
-                    
-                    // Inserir o HTML limpo no editor
-                    this.richEditor.commands.insertContent(htmlLimpo);
-                } 
-                // Se não tiver HTML, colar como texto plano
-                else if (textoPlano) {
-                    console.log('Colando como texto plano');
-                    this.richEditor.commands.insertContent(textoPlano);
-                }
-            } catch (error) {
-                console.error('Erro ao processar colagem:', error);
-                
-                // Fallback: inserir como texto plano em caso de erro
-                try {
-                    const textoPlano = event.clipboardData.getData('text/plain');
-                    if (textoPlano && this.richEditor) {
-                        this.richEditor.commands.insertContent(textoPlano);
-                    }
-                } catch (e) {
-                    console.error('Erro no fallback de colagem:', e);
-                }
-            }
+            // O problema de duplicação ocorria porque o TipTap já insere o conteúdo
+            // e nosso código também inseria, resultando em duplicação
+            
+            // Em vez disso, vamos apenas processar o conteúdo colado após a inserção
+            // pelo TipTap através do evento de atualização do editor
+            
+            // A função normalizarVariaveis já está sendo chamada após atualizações
+            // Isso vai garantir que as tags <var> e outras formatações sejam tratadas
+            // sem causar duplicação de conteúdo
         },
         normalizarVariaveis() {
             if (!this.richEditor) return;
